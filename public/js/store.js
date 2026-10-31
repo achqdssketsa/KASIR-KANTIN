@@ -68,6 +68,8 @@
     pad: function (n) { return String(n).padStart(2, '0'); },
     dateKey: function (iso) { var d = iso ? new Date(iso) : new Date(); return d.getFullYear() + '-' + U.pad(d.getMonth() + 1) + '-' + U.pad(d.getDate()); },
     todayKey: function () { return U.dateKey(); },
+    dayStart: function (key) { return new Date(key + 'T00:00:00').toISOString(); },
+    waNumber: function (s) { var d = String(s || '').replace(/\D/g, ''); if (!d) return ''; if (d.indexOf('62') === 0) return d; if (d.charAt(0) === '0') return '62' + d.slice(1); return '62' + d; },
     shiftDay: function (key, delta) { var p = key.split('-'); var d = new Date(+p[0], +p[1] - 1, +p[2] + delta); return U.dateKey(d.toISOString()); },
     time: function (iso) { var d = new Date(iso); return U.pad(d.getHours()) + ':' + U.pad(d.getMinutes()); },
     dateTime: function (iso) { var d = new Date(iso); return U.pad(d.getDate()) + '/' + U.pad(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + U.time(iso); },
@@ -108,7 +110,7 @@
     return {
       version: DB_VERSION,
       seq: 0,
-      settings: { storeName: 'Kantin Insya', storeAddress: 'Kantin Pusat', receiptFooter: 'Terima kasih, semoga sehat selalu!' },
+      settings: { storeName: 'Kantin Insya', storeAddress: 'Kantin Pusat', receiptFooter: 'Terima kasih, semoga sehat selalu!', storeWa: '', qris: '', receiptAfterPay: false },
       users: [
         { username: 'owner', role: 'owner', pw: U.hashPw('owner', 'owner123'), created_at: now },
         { username: 'kasir', role: 'cashier', pw: U.hashPw('kasir', 'kasir123'), created_at: now }
@@ -129,7 +131,7 @@
     SESSION_KEY: SESSION_KEY,
     load: function () {
       if (global.Cloud && global.Cloud.enabled) {       /* mode cloud: data datang dari Firestore, bukan localStorage */
-        this.data = { version: DB_VERSION, seq: 0, settings: { storeName: 'Kantin Insya', storeAddress: '', receiptFooter: '' }, users: [], categories: [], products: [], transactions: [] };
+        this.data = { version: DB_VERSION, seq: 0, settings: { storeName: 'Kantin Insya', storeAddress: '', receiptFooter: '', storeWa: '', qris: '', receiptAfterPay: false }, users: [], categories: [], products: [], transactions: [] };
         return this.data;
       }
       var raw = null, d = null;
@@ -141,6 +143,7 @@
         this.recovered = true;
       }
       this.data = isValid(d) ? d : seed();
+      this.data.settings = Object.assign({ storeWa: '', qris: '', receiptAfterPay: false }, this.data.settings);   /* data versi lama */
       if (!isValid(d)) this.save();
       return this.data;
     },
