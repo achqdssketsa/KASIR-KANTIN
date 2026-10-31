@@ -1,6 +1,6 @@
 rules_version = '2';
 
-// Aturan keamanan Kantin Insya. Tempel/deploy ke Firestore: firebase deploy --only firestore
+// Aturan keamanan Kantin Insya. Pasang dengan: firebase deploy --only firestore
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -11,7 +11,7 @@ service cloud.firestore {
     function isOwner() { return isStaff() && get(profilePath()).data.role == 'owner'; }
     function onlyChanges(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
 
-    // Penanda "toko sudah disiapkan". Hanya bisa dibuat sekali; setelah itu tidak ada yang bisa jadi pemilik baru.
+    // Penanda "toko sudah disiapkan". Hanya bisa dibuat sekali; setelah itu tidak ada yang bisa jadi pemilik pertama.
     match /meta/setup {
       allow read: if signedIn();
       allow create: if signedIn() && !exists(/databases/$(database)/documents/meta/setup);
@@ -19,19 +19,23 @@ service cloud.firestore {
 
     match /users/{uid} {
       allow read: if isOwner() || (signedIn() && request.auth.uid == uid);
-      // pemilik pertama (hanya selama toko belum disiapkan)
       allow create: if (signedIn() && request.auth.uid == uid && request.resource.data.role == 'owner'
                         && !exists(/databases/$(database)/documents/meta/setup))
-                    // pemilik menambah kasir
-                    || (isOwner() && request.resource.data.role == 'cashier' && request.resource.data.active == true);
-      // pemilik mengaktifkan/menonaktifkan akun lain (tidak boleh mengubah peran)
-      allow update: if isOwner() && uid != request.auth.uid && onlyChanges(['active']);
+                    // pemilik menambah pemilik lain atau kasir
+                    || (isOwner() && request.resource.data.role in ['owner', 'cashier'] && request.resource.data.active == true);
+      // pemilik hanya boleh mengaktifkan/menonaktifkan akun KASIR (akun pemilik tidak bisa dimatikan dari aplikasi)
+      allow update: if isOwner() && uid != request.auth.uid && resource.data.role == 'cashier' && onlyChanges(['active']);
       allow delete: if false;
     }
 
     match /config/{doc} {
       allow read: if isStaff();
       allow write: if isOwner();
+    }
+
+    match /categories/{id} {
+      allow read: if isStaff();
+      allow create, update, delete: if isOwner();
     }
 
     match /products/{id} {
@@ -43,12 +47,13 @@ service cloud.firestore {
     }
 
     match /transactions/{id} {
-      // pemilik melihat semua; kasir hanya transaksinya sendiri
-      allow read: if isOwner() || (isStaff() && resource.data.cashier_uid == request.auth.uid);
+      // semua staf (pemilik dan kasir) boleh melihat semua transaksi
+      allow read: if isStaff();
+      // kasir hanya boleh membuat penjualan, catatan sistem, dan tutup kas atas namanya sendiri
       allow create: if isStaff() && request.resource.data.cashier_uid == request.auth.uid
-                    && (isOwner() || request.resource.data.kind in ['sale', 'log']);
-      // pembatalan dan perubahan lain hanya pemilik; kasir hanya menambah hitungan cetak struk miliknya
-      allow update: if isOwner() || (isStaff() && resource.data.cashier_uid == request.auth.uid && onlyChanges(['prints']));
+                    && (isOwner() || request.resource.data.kind in ['sale', 'log', 'closing']);
+      // pembatalan dan perubahan lain hanya pemilik; kasir hanya menambah hitungan cetak struk
+      allow update: if isOwner() || (isStaff() && onlyChanges(['prints']));
       allow delete: if false;   // catatan keuangan tidak boleh dihapus
     }
   }
