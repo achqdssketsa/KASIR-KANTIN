@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Kantin Insya">
-  <rect width="512" height="512" rx="112" fill="#1F3A2E"/>
-  <path d="M136 276a120 120 0 0 0 240 0z" fill="#F6F0E4"/>
-  <rect x="120" y="262" width="272" height="22" rx="11" fill="#F6F0E4"/>
-  <g fill="none" stroke="#D9C7A3" stroke-width="15" stroke-linecap="round">
-    <path d="M216 240c-14-22 14-34 0-60s14-34 0-30"/>
-    <path d="M296 240c-14-22 14-34 0-60s14-34 0-30"/>
-  </g>
-</svg>
