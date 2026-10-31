@@ -2,31 +2,36 @@
  * Aktif hanya jika firebase-config.js diisi (enabled: true). Tanpa itu, aplikasi berjalan lokal seperti biasa.
  *
  * Cara kerja: aplikasi tetap memakai objek `db` di memori. Setiap kali Store.save() dipanggil, perbedaan
- * antara `db` dan keadaan cloud terakhir dikirim ke Firestore (stok dikirim sebagai selisih supaya dua HP
- * yang menjual barang yang sama tidak saling menimpa). Perubahan dari HP lain datang lewat listener.
- * Firestore menyimpan semuanya di HP juga, sehingga transaksi saat offline dikirim otomatis saat online. */
+ * antara `db` dan keadaan cloud terakhir dikirim ke Firestore:
+ *  - hanya KOLOM yang berubah yang dikirim (dua orang mengedit kolom berbeda pada produk yang sama tidak saling menimpa);
+ *  - stok dikirim sebagai SELISIH (increment), sehingga banyak kasir yang menjual barang yang sama tetap akurat;
+ *  - kategori disimpan sebagai dokumen sendiri-sendiri, jadi dua pemilik yang menambah kategori bersamaan tidak saling menghapus.
+ * Perubahan dari HP lain datang lewat listener waktu-nyata. Firestore juga menyimpan data di HP, sehingga transaksi
+ * saat offline dikirim otomatis begitu online. */
 (function (global) {
   'use strict';
   var CFG = global.KANTIN_CLOUD || {};
   var FB = CFG.firebase || {};
-  var Cloud = { enabled: !!(CFG.enabled && FB.apiKey && FB.projectId), status: 'loading', profile: null, settingUp: false, historyDays: CFG.historyDays || 60 };
+  var Cloud = { enabled: !!(CFG.enabled && FB.apiKey && FB.projectId), status: 'loading', profile: null, settingUp: false, historyDays: CFG.historyDays || 31 };
   global.Cloud = Cloud;
   if (!Cloud.enabled) return;
 
   var VER = '10.14.1';
   var BASE = 'https://www.gstatic.com/firebasejs/' + VER + '/';
   var DOMAIN = CFG.emailDomain || 'kantin-insya.app';
-  var auth, fs, unsubs = [], D = null, last = emptyLast(), meta = {}, firstDone = {};
+  var CFG_KEYS = ['storeName', 'storeAddress', 'receiptFooter', 'storeWa', 'qris', 'receiptAfterPay'];
+  var auth, fs, unsubs = [], D = null, last = emptyLast(), meta = {}, firstDone = {}, legacyCats = null;
   Cloud.onError = function () {}; Cloud.onStatus = function () {}; Cloud.onChange = function () {};
 
-  function emptyLast() { return { products: {}, transactions: {}, cfg: null }; }
+  function emptyLast() { return { products: {}, transactions: {}, cfg: null, cats: [] }; }
   function clone(o) { return o !== null && typeof o === 'object' ? JSON.parse(JSON.stringify(o)) : o; }
   function iso() { return new Date().toISOString(); }
   function same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
   function byTime(a, b) { return a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0; }
   function fromDocs(snap) { var a = []; snap.forEach(function (d) { var o = d.data(); o.id = d.id; a.push(o); }); return a; }
-  function cfgOf(x) { return { storeName: x.settings.storeName, storeAddress: x.settings.storeAddress, receiptFooter: x.settings.receiptFooter, categories: (x.categories || []).slice() }; }
+  function cfgOf(x) { var o = {}; CFG_KEYS.forEach(function (k) { o[k] = x.settings[k] === undefined ? '' : x.settings[k]; }); return o; }
   function mapById(arr) { var m = {}; arr.forEach(function (o) { m[o.id] = clone(o); }); return m; }
+  function catId(name) { return encodeURIComponent(String(name).trim().toLowerCase()); }
   function reportError(e) { console.error('[cloud]', e); Cloud.lastError = e; Cloud.onError(e); }
 
   Cloud.emailOf = function (u) { return String(u).trim().toLowerCase() + '@' + DOMAIN; };
@@ -74,6 +79,7 @@
   }
 
   /* ---------- Mulai / berhenti mendengarkan ---------- */
+  Cloud.cutoff = function () { return new Date(Date.now() - Cloud.historyDays * 864e5).toISOString(); };
   Cloud.start = function (profile, data) {
     Cloud.stop();
     Cloud.profile = profile; D = data;
@@ -84,12 +90,23 @@
     unsubs.push(fs.collection('config').doc('main').onSnapshot(O, function (d) {
       setMeta('config', d);
       if (d.exists) {
-        var c = d.data();
-        D.settings = Object.assign({}, D.settings, { storeName: c.storeName || D.settings.storeName, storeAddress: c.storeAddress || '', receiptFooter: c.receiptFooter || '' });
-        D.categories = c.categories || [];
-        last.cfg = cfgOf(D);
+        var c = d.data(), s = Object.assign({}, D.settings);
+        CFG_KEYS.forEach(function (k) { if (c[k] !== undefined) s[k] = c[k]; });
+        D.settings = s; last.cfg = cfgOf(D);
+        if (Array.isArray(c.categories)) legacyCats = c.categories;   /* data versi lama: dipindah otomatis ke dokumen kategori */
       }
       Cloud.onChange();
+    }, fail));
+
+    unsubs.push(fs.collection('categories').onSnapshot(O, function (snap) {
+      setMeta('categories', snap);
+      if (snap.docChanges().length || !firstDone.categories) {
+        var wasFirst = !firstDone.categories; firstDone.categories = true;
+        D.categories = fromDocs(snap).sort(byTime).map(function (c) { return c.name; });
+        last.cats = D.categories.slice();
+        if (wasFirst && owner && !D.categories.length && legacyCats && legacyCats.length && !snap.metadata.fromCache) migrateCats();
+        Cloud.onChange();
+      }
     }, fail));
 
     unsubs.push(fs.collection('products').onSnapshot(O, function (snap) {
@@ -100,9 +117,8 @@
       }
     }, fail));
 
-    var tq = fs.collection('transactions');
-    tq = owner ? tq.where('created_at', '>=', Cloud.cutoff()) : tq.where('cashier_uid', '==', uid).where('created_at', '>=', Cloud.cutoff());
-    unsubs.push(tq.onSnapshot(O, function (snap) {
+    /* Semua staf (pemilik dan kasir) melihat semua transaksi pada rentang hari yang dimuat. */
+    unsubs.push(fs.collection('transactions').where('created_at', '>=', Cloud.cutoff()).onSnapshot(O, function (snap) {
       setMeta('transactions', snap);
       if (snap.docChanges().length || !firstDone.transactions) {
         firstDone.transactions = true;
@@ -123,10 +139,14 @@
       }, fail));
     }
   };
-  Cloud.cutoff = function () { return new Date(Date.now() - Cloud.historyDays * 864e5).toISOString(); };
+  function migrateCats() {
+    var n = Date.now(), b = fs.batch();
+    legacyCats.forEach(function (name, i) { b.set(fs.collection('categories').doc(catId(name)), { name: name, created_at: new Date(n + i).toISOString() }); });
+    b.commit().catch(reportError);
+  }
   Cloud.stop = function () {
     unsubs.forEach(function (u) { try { u(); } catch (e) { /* abaikan */ } });
-    unsubs = []; meta = {}; firstDone = {}; last = emptyLast(); Cloud.profile = null; Cloud.status = 'loading';
+    unsubs = []; meta = {}; firstDone = {}; last = emptyLast(); legacyCats = null; Cloud.profile = null; Cloud.status = 'loading';
     if (D) { D.products = []; D.transactions = []; D.users = []; D.categories = []; }
   };
 
@@ -147,7 +167,9 @@
       (function (part) {
         var b = fs.batch();
         part.forEach(function (o) {
-          if (o[0] === 'set') { if (o[3]) b.set(o[1], o[2], o[3]); else b.set(o[1], o[2]); } else b.update(o[1], o[2]);
+          if (o[0] === 'set') { if (o[3]) b.set(o[1], o[2], o[3]); else b.set(o[1], o[2]); }
+          else if (o[0] === 'delete') b.delete(o[1]);
+          else b.update(o[1], o[2]);
         });
         p = p.then(function () { return b.commit(); });
       })(ops.slice(i, i + 400));
@@ -168,20 +190,27 @@
       else { var ch = changes(t, old, []); if (ch) ops.push(['update', ref, ch]); }
     });
     if (owner) {
-      var cfg = cfgOf(data);
-      if (!same(cfg, last.cfg)) ops.push(['set', fs.collection('config').doc('main'), cfg, { merge: true }]);
+      var cfg = cfgOf(data), diff = {};
+      CFG_KEYS.forEach(function (k) { if (!last.cfg || !same(cfg[k], last.cfg[k])) diff[k] = cfg[k]; });
+      if (Object.keys(diff).length) ops.push(['set', fs.collection('config').doc('main'), diff, { merge: true }]);
+      data.categories.forEach(function (name) {
+        if (last.cats.indexOf(name) < 0) ops.push(['set', fs.collection('categories').doc(catId(name)), { name: name, created_at: iso() }]);
+      });
+      last.cats.forEach(function (name) {
+        if (data.categories.indexOf(name) < 0) ops.push(['delete', fs.collection('categories').doc(catId(name))]);
+      });
     }
-    last = { products: mapById(data.products), transactions: mapById(data.transactions), cfg: cfgOf(data) };
+    last = { products: mapById(data.products), transactions: mapById(data.transactions), cfg: cfgOf(data), cats: data.categories.slice() };
     if (ops.length) commit(ops).catch(reportError);
     return true;
   };
 
   /* ---------- Pengguna ---------- */
-  Cloud.createCashier = function (username, pw) {
+  Cloud.createUser = function (username, pw, role) {
     var sec;
     try { sec = firebase.app('secondary'); } catch (e) { sec = firebase.initializeApp(FB, 'secondary'); }
     return sec.auth().createUserWithEmailAndPassword(Cloud.emailOf(username), pw).then(function (cred) {
-      return fs.collection('users').doc(cred.user.uid).set({ username: username, role: 'cashier', active: true, created_at: iso() })
+      return fs.collection('users').doc(cred.user.uid).set({ username: username, role: role === 'owner' ? 'owner' : 'cashier', active: true, created_at: iso() })
         .then(function () { return sec.auth().signOut(); });
     });
   };
@@ -199,12 +228,13 @@
       return b.commit();
     }).then(function () {
       var b = fs.batch(), n = Date.now();
-      b.set(fs.collection('config').doc('main'), { storeName: o.storeName, storeAddress: o.storeAddress, receiptFooter: o.receiptFooter, categories: o.categories || [] });
+      b.set(fs.collection('config').doc('main'), { storeName: o.storeName, storeAddress: o.storeAddress, receiptFooter: o.receiptFooter, storeWa: '', qris: '', receiptAfterPay: false });
+      (o.categories || []).forEach(function (name, i) { b.set(fs.collection('categories').doc(catId(name)), { name: name, created_at: new Date(n + i).toISOString() }); });
       (o.products || []).forEach(function (p, i) { var c = clone(p); c.created_at = new Date(n + i).toISOString(); b.set(fs.collection('products').doc(p.id), c); });
       return b.commit().catch(function (e) { console.error('[cloud] pengaturan awal gagal', e); });
     }).then(function () { Cloud.settingUp = false; return user; }, function (e) {
       Cloud.settingUp = false;
-      var del = user && !e.__stage2 ? user.delete().catch(function () {}) : Promise.resolve();
+      var del = user ? user.delete().catch(function () {}) : Promise.resolve();
       return del.then(function () { throw e; });
     });
   };
@@ -212,7 +242,9 @@
   /* Pindahkan data dari cadangan lokal (.json) ke cloud. Hanya pemilik. */
   Cloud.importBackup = function (d) {
     var uid = Cloud.profile.uid, ops = [], n = Date.now();
-    ops.push(['set', fs.collection('config').doc('main'), cfgOf(d), { merge: true }]);
+    var cfg = cfgOf(d); delete cfg.qris;
+    ops.push(['set', fs.collection('config').doc('main'), cfg, { merge: true }]);
+    (d.categories || []).forEach(function (name, i) { ops.push(['set', fs.collection('categories').doc(catId(name)), { name: name, created_at: new Date(n + i).toISOString() }]); });
     d.products.forEach(function (p, i) { var c = clone(p); c.created_at = c.created_at || new Date(n + i).toISOString(); ops.push(['set', fs.collection('products').doc(p.id), c]); });
     d.transactions.forEach(function (t) { var c = clone(t); c.cashier_uid = uid; ops.push(['set', fs.collection('transactions').doc(t.id), c]); });
     return commit(ops);
