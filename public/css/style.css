@@ -430,3 +430,27 @@ body[data-route="pesanan"] .main { padding-bottom: calc(var(--tabbar-h) + var(--
 .alert .btn { flex: none; }
 .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
 .status-dot.off { background: var(--warn); }
+
+/* ---------- v1.3: foto produk, kategori, QRIS, WhatsApp ---------- */
+.head-actions { display: flex; gap: 6px; align-items: center; }
+.product-thumb img, .photo-box img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
+.product-thumb.has-photo { padding: 0; overflow: hidden; }
+.add-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 4px 0 12px; }
+.cat-block { margin: 20px 0 6px; }
+.cat-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.cat-head h3 { margin: 0; font-size: 18px; }
+.cat-empty { padding: 4px 2px 8px; }
+.photo-row { display: flex; gap: 14px; align-items: center; }
+.photo-box { flex: none; width: 96px; height: 96px; border-radius: 18px; background: var(--tertiary); display: flex; align-items: center; justify-content: center; overflow: hidden; color: var(--on-tertiary); }
+.photo-actions { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.photo-actions p { margin: 0; }
+.btn-wa { background: #0B7A4B; color: #fff; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.btn-wa:hover:not(:disabled) { background: #096B42; }
+.btn-wa .tiny { opacity: .85; font-weight: 400; }
+.qris-img { display: block; width: 100%; max-width: 260px; margin: 8px auto; border-radius: var(--r-md); background: #fff; border: 1px solid var(--border); cursor: zoom-in; }
+.qris-big { display: block; width: 100%; max-width: 420px; margin: 8px auto 14px; border-radius: var(--r-md); background: #fff; }
+.qris-box { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.audit-tools { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; flex-wrap: wrap; }
+.date-input.boxed { border: 1px solid var(--border-strong); border-radius: var(--r-md); padding: 8px 10px; background: var(--card); color: var(--on-surface); }
+.seg4 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.inline-form select.input { flex: 0 1 120px; }
