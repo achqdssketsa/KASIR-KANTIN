@@ -4,7 +4,7 @@
 window.KANTIN_CLOUD = {
 enabled: true,
 firebase: { 
-  apiKey: "AIzaSyCXwx8Mk0tXvpK9-I5ha5ZCJChwaldHQc4", 
+  apiKey: "AIzaSyCXwx8MkOtXvpK9-I5ha5ZCJChwaldHQc4", 
   authDomain: "kantin-insya.firebaseapp.com", 
   projectId: "kantin-insya", 
   appId: "1:144100812099:web:36b7ec48165698cc5f3bf6" 
