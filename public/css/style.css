@@ -454,3 +454,36 @@ body[data-route="pesanan"] .main { padding-bottom: calc(var(--tabbar-h) + var(--
 .date-input.boxed { border: 1px solid var(--border-strong); border-radius: var(--r-md); padding: 8px 10px; background: var(--card); color: var(--on-surface); }
 .seg4 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .inline-form select.input { flex: 0 1 120px; }
+
+/* ---------- v1.4: audit yang lebih rapi ---------- */
+.block { display: block; }
+.share-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0 4px; }
+.share-row .btn { margin: 0; justify-content: center; }
+.period-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+.period-card .chips { margin: 0; padding: 0; }
+.period-card p { margin: 0; }
+.period-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.period-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.kpi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+.kpi { background: var(--card); border: 1px solid var(--border); border-left-width: 4px; border-radius: var(--r-md); padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.kpi-val { font-size: 20px; line-height: 1.2; overflow-wrap: anywhere; }
+.kpi.t-base { border-left-color: var(--brand); } .kpi.t-ok { border-left-color: var(--ok); } .kpi.t-warn { border-left-color: var(--warn); } .kpi.t-danger { border-left-color: var(--danger); }
+.tone-bg-info { background: rgba(74, 91, 105, .1); color: var(--info); }
+.finding { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: var(--r-md); margin-bottom: 8px; color: var(--on-surface); }
+.finding p { margin: 0; } .finding b { display: block; font-size: 14px; } .finding .small { display: block; margin-top: 2px; }
+.finding .f-ic { flex: none; margin-top: 1px; }
+.finding.tone-bg-ok .f-ic { color: var(--ok); } .finding.tone-bg-danger .f-ic { color: var(--danger); } .finding.tone-bg-warn .f-ic { color: var(--warn); } .finding.tone-bg-info .f-ic { color: var(--info); }
+.metric { padding: 12px 0; border-bottom: 1px solid var(--divider); }
+.metric:last-of-type { border-bottom: 0; }
+.metric-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.metric-top b { font-size: 14px; }
+.metric-val { font-family: var(--font-display); font-size: 20px; white-space: nowrap; }
+.metric .bar-bg { margin-top: 8px; }
+.metric p { margin: 6px 0 0; }
+.explain { border-top: 1px solid var(--divider); margin-top: 6px; font-size: 13px; }
+.explain summary { cursor: pointer; color: var(--brand); font-weight: 600; padding: 10px 0; }
+.explain p { margin: 0 0 8px; }
+.day-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; margin: 18px 0 6px; padding: 0 2px; font-weight: 600; font-size: 14px; }
+.nw { white-space: nowrap; }
+.period-card .chips { flex-wrap: wrap; overflow: visible; }
+.day-head > span:last-child { white-space: nowrap; }
