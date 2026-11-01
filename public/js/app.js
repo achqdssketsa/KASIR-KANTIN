@@ -16,7 +16,7 @@
     reportDate: U.todayKey(), modalKind: 'modal_in', loginRole: 'owner'
   };
 
-  S.booting = !!Cloud.enabled; S.setup = false; S.fatal = null; S.auditDate = '';
+  S.booting = !!Cloud.enabled; S.setup = false; S.fatal = null; S.auditFrom = U.todayKey(); S.auditTo = U.todayKey();
   var sess = Cloud.enabled ? null : localStorage.getItem(Store.SESSION_KEY);
   if (sess) S.user = db.users.find(function (u) { return u.username === sess; }) || null;
 
@@ -228,6 +228,7 @@
     r.gross_profit = r.total_sales - r.total_cost;
     r.margin_pct = r.total_sales ? Math.round(r.gross_profit / r.total_sales * 1000) / 10 : 0;
     r.net_profit = r.gross_profit - r.expense_total;
+    r.net_margin_pct = r.total_sales ? Math.round(r.net_profit / r.total_sales * 1000) / 10 : 0;
     r.avg_sale = r.sale_count ? Math.round(r.total_sales / r.sale_count) : 0;
     r.noncash_sales = r.by_method.qris + r.by_method.transfer;
     var start = U.dayStart(key);
@@ -276,26 +277,110 @@
     L.push('', '_Dikirim oleh ' + S.user.username + ' · ' + U.dateTime(new Date().toISOString()) + '_');
     return L.join('\n');
   }
-  function auditText(key) {
-    var st = db.settings, list = db.transactions.filter(function (t) { return U.dateKey(t.created_at) === key; });
-    var by = {}, voided = [], closings = [], logs = [], reprints = 0;
-    list.forEach(function (t) {
-      if (t.kind === 'log') { logs.push(t); if (/dicetak ulang/.test(t.note || '')) reprints++; return; }
-      if (t.voided) { voided.push(t); return; }
-      by[t.kind] = by[t.kind] || { n: 0, sum: 0 };
-      by[t.kind].n++; by[t.kind].sum += t.kind === 'sale' ? t.subtotal : (t.amount || 0);
-      if (t.kind === 'closing') closings.push(t);
+  /* ===== Analisis periode (Laporan Audit) =====
+   * Persentase laba, memakai istilah akuntansi usaha:
+   *  Margin kotor  = Laba kotor / Penjualan            (sisa tiap Rp100 penjualan setelah modal barang)
+   *  Margin bersih = Laba bersih / Penjualan           (sisa setelah modal barang dan semua biaya)
+   *  Markup        = Laba kotor / Modal barang (HPP)   (kenaikan harga jual dari modal)
+   *  Titik impas   = Biaya operasional / Margin kotor  (penjualan minimum agar biaya tertutup) */
+  function fmtPct(v) { return (Math.round(v * 10) / 10).toString().replace('.', ',') + '%'; }
+  function shortDate(k) { return U.longDate(k).replace(/^[^,]+,\s*/, ''); }
+  function periodLabel(from, to) {
+    if (!from && !to) return 'Semua tanggal';
+    if (from && to) return from === to ? U.longDate(from) : shortDate(from) + ' – ' + shortDate(to);
+    return from ? 'Sejak ' + shortDate(from) : 'Sampai ' + shortDate(to);
+  }
+  function daysBetween(a, b) { return Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 864e5) + 1; }
+  function presetRange(p) {
+    var t = U.todayKey();
+    if (p === 'today') return [t, t];
+    if (p === '7') return [U.shiftDay(t, -6), t];
+    if (p === '30') return [U.shiftDay(t, -29), t];
+    if (p === 'month') return [t.slice(0, 8) + '01', t];
+    return ['', ''];
+  }
+  function auditPreset() {
+    var found = '';
+    ['today', '7', '30', 'month', 'all'].forEach(function (p) { var x = presetRange(p); if (x[0] === S.auditFrom && x[1] === S.auditTo) found = p; });
+    return found;
+  }
+  function rangeReport(from, to) {
+    var r = { from: from, to: to, sales: 0, cost: 0, expense: 0, modal_in: 0, purchase: 0, draw: 0, sale_count: 0, item_count: 0, void_total: 0, variance: 0, zero_cost_items: 0,
+      reprints: 0, price_changes: 0, count: 0, by_method: { tunai: 0, qris: 0, transfer: 0 }, days: {}, prod: {}, closings: [], voids: [], logs: [] };
+    db.transactions.forEach(function (t) {
+      var k = U.dateKey(t.created_at);
+      if ((from && k < from) || (to && k > to)) return;
+      r.count++;
+      if (t.kind === 'log') {
+        if (/dicetak ulang/.test(t.note || '')) r.reprints++; else { r.logs.push(t); if (/^Ubah produk/.test(t.note || '')) r.price_changes++; }
+        return;
+      }
+      var day = r.days[k] = r.days[k] || { sales: 0, cost: 0, expense: 0, sale_count: 0 };
+      if (t.voided) { r.voids.push(t); if (t.kind === 'sale') r.void_total += t.subtotal; return; }
+      if (t.kind === 'sale') {
+        r.sale_count++; day.sale_count++; r.sales += t.subtotal; day.sales += t.subtotal; r.cost += t.cost_total || 0; day.cost += t.cost_total || 0;
+        r.by_method[t.payment_method] = (r.by_method[t.payment_method] || 0) + t.subtotal;
+        t.items.forEach(function (it) {
+          r.item_count += it.qty; if (!it.cost) r.zero_cost_items += it.qty;
+          var p = r.prod[it.name] = r.prod[it.name] || { name: it.name, qty: 0, revenue: 0, cost: 0 };
+          p.qty += it.qty; p.revenue += it.qty * it.price; p.cost += it.qty * (it.cost || 0);
+        });
+      } else if (t.kind === 'expense') { r.expense += t.amount; day.expense += t.amount; }
+      else if (t.kind === 'modal_in') r.modal_in += t.amount;
+      else if (t.kind === 'purchase') r.purchase += t.amount;
+      else if (t.kind === 'owner_draw') r.draw += t.amount;
+      else if (t.kind === 'closing') { r.closings.push(t); r.variance += t.diff || 0; }
     });
-    var L = ['*LAPORAN AUDIT — ' + st.storeName.toUpperCase() + '*', U.longDate(key), ''];
-    ['sale', 'modal_in', 'purchase', 'expense', 'owner_draw'].forEach(function (k) { if (by[k]) L.push(kindInfo({ kind: k }).label + ': ' + by[k].n + ' catatan, ' + rp(by[k].sum)); });
-    if (!list.length) L.push('Tidak ada catatan pada tanggal ini.');
-    if (closings.length) { L.push('', '*Tutup kas*'); closings.forEach(function (c) { L.push(U.time(c.created_at) + ' · ' + c.cashier + ': seharusnya ' + rp(c.expected) + ', dihitung ' + rp(c.actual) + ' → ' + txnAmount(c)); }); }
-    L.push('', '*Dibatalkan: ' + voided.length + '*');
-    voided.slice(0, 8).forEach(function (t) { L.push('• ' + (t.no || kindInfo(t).label) + ' ' + rp(t.subtotal || t.amount || 0) + ' — ' + (t.void_reason || '-') + ' (oleh ' + (t.voided_by || '-') + ')'); });
-    if (voided.length > 8) L.push('… dan ' + (voided.length - 8) + ' lainnya');
-    if (reprints) L.push('', 'Struk dicetak ulang: ' + reprints + ' kali');
-    var sys = logs.filter(function (t) { return !/dicetak ulang/.test(t.note || ''); });
-    if (sys.length) { L.push('', '*Perubahan data*'); sys.slice(-8).forEach(function (t) { L.push('• ' + U.time(t.created_at) + ' ' + t.cashier + ': ' + t.note); }); if (sys.length > 8) L.push('… ' + (sys.length - 8) + ' catatan sebelumnya tidak ditampilkan'); }
+    r.gross = r.sales - r.cost; r.net = r.gross - r.expense;
+    r.gross_pct = r.sales ? r.gross / r.sales * 100 : 0; r.net_pct = r.sales ? r.net / r.sales * 100 : 0;
+    r.markup_pct = r.cost ? r.gross / r.cost * 100 : null;
+    r.cogs_pct = r.sales ? r.cost / r.sales * 100 : 0; r.opex_pct = r.sales ? r.expense / r.sales * 100 : 0;
+    r.breakeven = r.gross > 0 && r.sales > 0 ? Math.round(r.expense / (r.gross / r.sales)) : null;
+    r.products = Object.keys(r.prod).map(function (k) { var p = r.prod[k]; p.profit = p.revenue - p.cost; p.margin_pct = p.revenue ? p.profit / p.revenue * 100 : 0; return p; })
+      .sort(function (a, b) { return b.profit - a.profit; });
+    r.day_list = Object.keys(r.days).sort().map(function (k) { var d = r.days[k]; return { date: k, sale_count: d.sale_count, sales: d.sales, cost: d.cost, expense: d.expense, gross: d.sales - d.cost, net: d.sales - d.cost - d.expense }; });
+    return r;
+  }
+  function prevRange(from, to) {
+    if (!from || !to) return null;
+    var n = daysBetween(from, to);
+    return [U.shiftDay(from, -n), U.shiftDay(from, -1)];
+  }
+  function auditFindings(r) {
+    var f = [];
+    function add(tone, icon, title, text) { f.push({ tone: tone, icon: icon, title: title, text: text }); }
+    if (r.sale_count && r.net < 0) add('danger', 'trend', 'Usaha rugi pada periode ini', 'Laba kotor ' + rp(r.gross) + ' lebih kecil dari biaya operasional ' + rp(r.expense) + '. Periksa harga jual, modal produk, dan biaya.');
+    r.products.filter(function (p) { return p.profit < 0; }).slice(0, 3).forEach(function (p) {
+      add('danger', 'xc', 'Dijual rugi: ' + p.name, 'Harga jual lebih rendah dari modalnya. Rugi ' + rp(-p.profit) + ' dari ' + p.qty + ' porsi.');
+    });
+    if (r.voids.length) add('warn', 'xc', r.voids.length + ' catatan dibatalkan', (r.void_total ? 'Nilai penjualan yang dibatalkan ' + rp(r.void_total) + '. ' : '') + 'Pembatalan sering dipakai untuk menutupi kecurangan, jadi cek alasannya di filter Dibatalkan.');
+    if (r.closings.length) {
+      if (r.variance < 0) add('danger', 'cash', 'Uang di laci kurang ' + rp(-r.variance), 'Dari ' + r.closings.length + ' kali tutup kas. Cek pengeluaran yang belum dicatat atau kembalian yang salah.');
+      else if (r.variance > 0) add('warn', 'cash', 'Uang di laci lebih ' + rp(r.variance), 'Mungkin ada penjualan atau modal masuk yang belum dicatat.');
+      else add('ok', 'check', 'Semua tutup kas pas', r.closings.length + ' kali tutup kas tanpa selisih.');
+    } else if (r.by_method.tunai > 0) add('warn', 'cash', 'Belum ada tutup kas', 'Ada penjualan tunai ' + rp(r.by_method.tunai) + ' tetapi uang di laci belum dihitung. Lakukan tutup kas di Laporan Harian.');
+    if (r.zero_cost_items) add('warn', 'box', r.zero_cost_items + ' item terjual tanpa modal', 'Modal (HPP) Rp 0 membuat laba terlihat terlalu besar. Isi modal di menu Produk.');
+    if (r.price_changes) add('info', 'edit', r.price_changes + ' perubahan harga, modal, atau stok produk', 'Tercatat di Catatan Sistem. Pastikan perubahan dilakukan oleh yang berwenang.');
+    if (r.reprints) add('info', 'printer', 'Struk dicetak ulang ' + r.reprints + ' kali', 'Cetak ulang berulang bisa menandakan struk dipakai ulang. Cek di Catatan Sistem.');
+    if (!f.length) add('ok', 'check', 'Tidak ada temuan', r.count ? 'Tidak ada hal yang perlu dicek pada periode ini.' : 'Belum ada catatan pada periode ini.');
+    return f;
+  }
+  function auditText(from, to) {
+    var r = rangeReport(from, to), st = db.settings, L = ['*LAPORAN AUDIT — ' + st.storeName.toUpperCase() + '*', periodLabel(from, to), ''];
+    L.push('*Ringkasan*', 'Penjualan: ' + rp(r.sales) + ' (' + r.sale_count + ' transaksi)', 'Modal barang (HPP): ' + rp(r.cost),
+      'Laba kotor: ' + rp(r.gross) + ' (' + fmtPct(r.gross_pct) + ')', 'Biaya operasional: ' + rp(r.expense), '*Laba bersih: ' + rp(r.net) + ' (' + fmtPct(r.net_pct) + ')*');
+    if (r.breakeven !== null) L.push('Titik impas: ' + rp(r.breakeven) + (r.sales >= r.breakeven ? ' (sudah terlewati)' : ' (belum tercapai)'));
+    if (r.modal_in || r.purchase || r.draw) L.push('', 'Di luar laba: modal masuk ' + rp(r.modal_in) + ', belanja stok ' + rp(r.purchase) + ', prive ' + rp(r.draw));
+    L.push('', '*Temuan*');
+    auditFindings(r).forEach(function (x) { L.push('• ' + x.title); });
+    if (r.closings.length) { L.push('', '*Tutup kas*'); r.closings.slice(-5).forEach(function (c) { L.push(U.dateKey(c.created_at).slice(5) + ' ' + U.time(c.created_at) + ' ' + c.cashier + ': ' + txnAmount(c)); }); }
+    if (r.voids.length) {
+      L.push('', '*Dibatalkan*');
+      r.voids.slice(0, 6).forEach(function (t) { L.push('• ' + (t.no || kindInfo(t).label) + ' ' + rp(t.subtotal || t.amount || 0) + ' — ' + (t.void_reason || '-') + ' (' + (t.voided_by || '-') + ')'); });
+      if (r.voids.length > 6) L.push('… dan ' + (r.voids.length - 6) + ' lainnya');
+    }
+    var logs = r.logs.slice(-6);
+    if (logs.length) { L.push('', '*Perubahan data*'); logs.forEach(function (t) { L.push('• ' + U.dateKey(t.created_at).slice(5) + ' ' + t.cashier + ': ' + t.note); }); }
     L.push('', '_Dikirim oleh ' + S.user.username + ' · ' + U.dateTime(new Date().toISOString()) + '_');
     return L.join('\n');
   }
@@ -429,12 +514,13 @@
     var k = kindInfo(t);
     var title = t.kind === 'sale' ? (t.items[0] ? t.items[0].name : 'Penjualan') + (t.items.length > 1 ? ' +' + (t.items.length - 1) + ' lainnya' : '') : k.label;
     var open = opts && opts.open;
-    var sub = U.dateTime(t.created_at) + ' · ' + esc(t.cashier) + (t.payment_method ? ' · ' + pmLabel(t.payment_method) : '') + (t.no ? ' · ' + t.no : '') + (t.source === 'rekening' ? ' · via rekening' : '');
+    var sub = (opts && opts.compact ? U.time(t.created_at) : U.dateTime(t.created_at)) + ' · ' + esc(t.cashier) + (t.payment_method ? ' · ' + pmLabel(t.payment_method) : '') + (t.no ? ' · ' + t.no : '') + (t.source === 'rekening' ? ' · via rekening' : '');
     var html = '<div class="txn ' + (t.voided ? 'voided' : '') + '" ' + (opts && opts.action ? 'data-action="' + opts.action + '" data-id="' + t.id + '"' : '') + '>' +
       '<div class="txn-main"><span class="badge tone-' + k.tone + '">' + I(k.icon, 18) + '</span>' +
       '<div class="txn-info"><h4>' + esc(title) + '</h4><p class="small muted">' + sub + '</p>' +
       (t.kind === 'log' || (t.note && !open) ? '<p class="small note">' + esc(t.note) + '</p>' : '') + '</div>' +
       '<div class="txn-amt"><span class="amt tone-text-' + (t.kind === 'expense' || t.kind === 'purchase' ? 'danger' : t.kind === 'closing' ? (t.diff < 0 ? 'danger' : t.diff > 0 ? 'warn' : 'ok') : 'base') + '">' + txnAmount(t) + '</span>' +
+      (t.kind === 'sale' && !t.voided && opts && opts.compact ? '<span class="tiny muted">laba ' + rp(t.subtotal - t.cost_total) + (t.subtotal ? ' (' + fmtPct((t.subtotal - t.cost_total) / t.subtotal * 100) + ')' : '') + '</span>' : '') +
       (t.voided ? '<span class="void-tag">DIBATALKAN</span>' : '') + '</div></div>';
     if (open) {
       html += '<div class="txn-detail">';
@@ -484,14 +570,14 @@
     var d = S.reportDate, r = report(d), today = U.todayKey(), sales = r.total_sales || 1;
     var tooOld = Cloud.enabled && d < U.dateKey(Cloud.cutoff());
     var waTo = db.settings.storeWa ? 'ke WhatsApp ' + esc(db.settings.storeWa) : 'pilih kontak di WhatsApp';
-    return topbar('Laporan Harian', '<button class="icon-btn" data-action="export-report" aria-label="Ekspor CSV" title="Ekspor CSV">' + I('download') + '</button>') +
+    return topbar('Laporan Harian', '<button class="icon-btn" data-action="export-report" aria-label="Unduh Excel" title="Unduh Excel">' + I('download') + '</button>') +
       '<div class="page"><div class="date-row"><button class="icon-btn" data-action="report-day" data-d="-1" aria-label="Hari sebelumnya">' + I('left') + '</button>' +
       '<div class="date-center"><p class="display">' + U.longDate(d) + '</p><input type="date" id="report-date" class="date-input" value="' + d + '" max="' + today + '"></div>' +
       '<button class="icon-btn" data-action="report-day" data-d="1" ' + (d >= today ? 'disabled' : '') + ' aria-label="Hari berikutnya">' + I('right') + '</button></div>' +
       (tooOld ? '<div class="notice">' + I('info', 18) + '<span>Tanggal ini lebih lama dari ' + Cloud.historyDays + ' hari, sehingga datanya tidak dimuat di HP. Angka di bawah bisa tidak lengkap.</span></div>' : '') +
       '<section class="hero-card"><p class="eyebrow">LABA BERSIH</p><p class="display hero-val">' + rp(r.net_profit) + '</p>' +
-      '<p class="small">dari ' + r.sale_count + ' transaksi · ' + r.item_count + ' item · margin kotor ' + r.margin_pct + '%</p></section>' +
-      '<button class="btn btn-wa btn-block" data-action="send-wa-report">' + I('chat', 18) + ' Kirim laporan via WhatsApp <span class="tiny">(' + waTo + ')</span></button>' +
+      '<p class="small">dari ' + r.sale_count + ' transaksi · ' + r.item_count + ' item · margin kotor ' + fmtPct(r.margin_pct) + ' · margin bersih ' + fmtPct(r.net_margin_pct) + '</p></section>' +
+      '<div class="share-row"><button class="btn btn-outline" data-action="export-report">' + I('download', 18) + ' Unduh Excel</button><button class="btn btn-wa" data-action="send-wa-report">' + I('chat', 18) + ' WhatsApp</button></div><p class="tiny muted center">WhatsApp: ' + waTo + '</p>' +
       (r.zero_cost_items ? '<div class="notice">' + I('info', 18) + '<span>' + r.zero_cost_items + ' item terjual tanpa modal (HPP Rp 0). Isi modal di menu Produk agar laba tidak terlihat terlalu besar.</span></div>' : '') +
       '<div class="stats">' + stat('Penjualan', r.total_sales, 'trend', 'base', 'rata-rata ' + rp(r.avg_sale) + ' / transaksi') + stat('Modal barang terjual (HPP)', r.total_cost, 'box') +
       stat('Laba kotor', r.gross_profit, 'bar', 'base', 'penjualan - HPP') + stat('Biaya operasional', r.expense_total, 'up', 'danger', 'mengurangi laba') +
@@ -527,25 +613,97 @@
       '<div class="card"><div class="kv"><span>Penjualan non-tunai (rekening)</span><span>' + rp(r.noncash_sales) + '</span></div></div></div></div></div>';
   }
 
+  var AUDIT_FILTERS = [['all', 'Semua'], ['sale', 'Penjualan'], ['money', 'Uang masuk/keluar'], ['closing', 'Tutup kas'], ['voided', 'Dibatalkan'], ['log', 'Catatan sistem']];
+  function auditMatch(t, f) {
+    if (f === 'all') return true;
+    if (f === 'voided') return !!t.voided;
+    if (f === 'money') return ['modal_in', 'purchase', 'expense', 'owner_draw'].indexOf(t.kind) >= 0;
+    return t.kind === f;
+  }
+  function kpi(label, val, sub, tone) {
+    return '<div class="kpi t-' + (tone || 'base') + '"><span class="eyebrow">' + label + '</span><span class="display kpi-val">' + val + '</span><span class="small muted">' + sub + '</span></div>';
+  }
+  function metricRow(name, formula, value, bar, sentence) {
+    return '<div class="metric"><div class="metric-top"><div><b>' + name + '</b><span class="tiny muted block">' + formula + '</span></div><span class="metric-val">' + value + '</span></div>' +
+      (bar === null ? '' : '<div class="bar-bg"><div class="bar-fill" style="width:' + Math.max(0, Math.min(100, bar)) + '%"></div></div>') + '<p class="small">' + sentence + '</p></div>';
+  }
+  function analysisCard(r, from, to) {
+    var h = '<p class="label">ANALISIS PERSENTASE LABA</p><div class="card">';
+    if (!r.sale_count) return h + '<p class="muted small">Belum ada penjualan pada periode ini, jadi persentase laba belum bisa dihitung.</p></div>';
+    h += metricRow('Margin kotor', 'Laba kotor ÷ Penjualan', fmtPct(r.gross_pct), r.gross_pct,
+      'Dari setiap Rp100 penjualan, <b>Rp' + Math.round(r.gross_pct) + '</b> tersisa setelah membayar modal barang. Sisa ini dipakai untuk menutup biaya dan menjadi laba.');
+    h += metricRow('Margin bersih', 'Laba bersih ÷ Penjualan', fmtPct(r.net_pct), r.net_pct,
+      r.net >= 0 ? 'Dari setiap Rp100 penjualan, <b>Rp' + Math.round(r.net_pct) + '</b> benar-benar menjadi laba setelah modal barang dan semua biaya operasional.'
+        : 'Negatif berarti rugi: setiap Rp100 penjualan menghasilkan kerugian <b>Rp' + Math.abs(Math.round(r.net_pct)) + '</b> setelah modal barang dan biaya.');
+    h += metricRow('Markup', 'Laba kotor ÷ Modal barang (HPP)', r.markup_pct === null ? '-' : fmtPct(r.markup_pct), null,
+      r.markup_pct === null ? 'Modal produk belum diisi, jadi markup tidak bisa dihitung.' : 'Harga jual rata-rata <b>' + fmtPct(r.markup_pct) + '</b> di atas modalnya. Markup dihitung dari modal, margin dari harga jual, jadi angkanya berbeda untuk untung yang sama.');
+    h += metricRow('Porsi modal barang (HPP)', 'HPP ÷ Penjualan', fmtPct(r.cogs_pct), r.cogs_pct,
+      '<b>Rp' + Math.round(r.cogs_pct) + '</b> dari setiap Rp100 penjualan habis untuk modal barang. Makin kecil makin longgar, selama kualitas dan harga tetap bersaing.');
+    h += metricRow('Porsi biaya operasional', 'Biaya ÷ Penjualan', fmtPct(r.opex_pct), r.opex_pct,
+      r.expense ? '<b>Rp' + Math.round(r.opex_pct) + '</b> dari setiap Rp100 penjualan terpakai untuk gas, listrik, gaji, dan biaya lain.' : 'Belum ada biaya operasional tercatat. Catat di menu Modal agar laba bersih tidak terlihat terlalu besar.');
+    var be = r.breakeven;
+    h += metricRow('Titik impas', 'Biaya ÷ Margin kotor', be === null ? '-' : rp(be), null,
+      be === null ? 'Belum bisa dihitung (butuh penjualan dengan laba kotor positif).'
+        : !r.expense ? 'Belum ada biaya operasional tercatat, jadi titik impas masih Rp 0.'
+        : 'Agar biaya <b>' + rp(r.expense) + '</b> tertutup, penjualan minimal <b>' + rp(be) + '</b> pada periode ini. Penjualan Anda ' + rp(r.sales) + (r.sales >= be ? ', sudah <b>melewati</b> titik impas.' : ', <b>belum</b> mencapai titik impas.'));
+    var pr = prevRange(from, to);
+    if (pr) {
+      var pv = rangeReport(pr[0], pr[1]);
+      if (pv.sale_count) {
+        var dS = pv.sales ? (r.sales - pv.sales) / pv.sales * 100 : 0, dM = r.net_pct - pv.net_pct;
+        h += '<div class="metric"><div class="metric-top"><div><b>Dibanding periode sebelumnya</b><span class="tiny muted block">' + periodLabel(pr[0], pr[1]) + '</span></div></div>' +
+          '<p class="small">Penjualan ' + (dS >= 0 ? 'naik ' : 'turun ') + fmtPct(Math.abs(dS)) + ' (' + rp(pv.sales) + ' → ' + rp(r.sales) + '). Margin bersih ' + (dM >= 0 ? 'naik ' : 'turun ') + fmtPct(Math.abs(dM)).replace('%', '') + ' poin (' + fmtPct(pv.net_pct) + ' → ' + fmtPct(r.net_pct) + ').</p></div>';
+      }
+    }
+    return h + '<details class="explain"><summary>Cara membaca angka ini</summary><p>Margin dihitung dari <b>harga jual</b>, markup dihitung dari <b>modal</b>. Contoh: modal Rp6.000 dijual Rp10.000 → laba Rp4.000, margin 40%, markup 66,7%.</p>' +
+      '<p>Laba kotor = penjualan − modal barang terjual. Laba bersih = laba kotor − biaya operasional. Belanja stok, modal masuk, dan prive tidak dihitung sebagai biaya (lihat Laporan Harian).</p>' +
+      '<p>Angka ini hanya sebaik data modal produk dan catatan biaya. Ini analisis keuangan usaha kecil, bukan laporan akuntansi resmi.</p></details></div>';
+  }
+
   function viewAudit() {
-    var filters = [['all', 'Semua'], ['sale', 'Penjualan'], ['modal_in', 'Modal'], ['purchase', 'Belanja Stok'], ['expense', 'Biaya'], ['owner_draw', 'Prive'], ['closing', 'Tutup Kas'], ['voided', 'Dibatalkan'], ['log', 'Catatan Sistem']];
-    var q = S.auditQ.trim().toLowerCase(), today = U.todayKey();
+    var from = S.auditFrom, to = S.auditTo, today = U.todayKey(), preset = auditPreset();
+    var r = rangeReport(from, to), finds = auditFindings(r);
+    var presets = [['today', 'Hari ini'], ['7', '7 hari'], ['30', '30 hari'], ['month', 'Bulan ini'], ['all', 'Semua']];
+    var q = S.auditQ.trim().toLowerCase();
     var list = db.transactions.filter(function (t) {
-      if (S.auditDate && U.dateKey(t.created_at) !== S.auditDate) return false;
-      if (S.auditFilter === 'voided') { if (!t.voided) return false; }
-      else if (S.auditFilter !== 'all' && t.kind !== S.auditFilter) return false;
+      var k = U.dateKey(t.created_at);
+      if ((from && k < from) || (to && k > to)) return false;
+      if (!auditMatch(t, S.auditFilter)) return false;
       if (!q) return true;
       return [(t.no || ''), t.cashier, t.note || '', (t.items || []).map(function (i) { return i.name; }).join(' ')].join(' ').toLowerCase().indexOf(q) >= 0;
     }).slice().reverse();
-    return topbar('Laporan Audit', '<button class="icon-btn" data-action="export-audit" aria-label="Ekspor CSV" title="Ekspor semua ke CSV">' + I('download') + '</button>') +
-      '<div class="chips sticky-chips">' + filters.map(function (f) { return '<button class="chip ' + (S.auditFilter === f[0] ? 'active' : '') + '" data-action="audit-filter" data-f="' + f[0] + '">' + f[1] + '</button>'; }).join('') + '</div>' +
-      '<div class="page"><div class="audit-tools"><input type="date" id="audit-date" class="date-input boxed" value="' + esc(S.auditDate) + '" max="' + today + '" aria-label="Filter tanggal">' +
-      (S.auditDate ? '<button class="btn btn-outline btn-sm" data-action="audit-all">Semua tanggal</button>' : '<span class="muted small">Semua tanggal</span>') + '</div>' +
-      '<button class="btn btn-wa btn-block" data-action="send-wa-audit">' + I('chat', 18) + ' Kirim audit ' + (S.auditDate ? U.longDate(S.auditDate) : 'hari ini') + ' via WhatsApp</button>' +
+    var tooOld = Cloud.enabled && from && from < U.dateKey(Cloud.cutoff());
+    var groups = [], seen = {};
+    list.slice(0, 300).forEach(function (t) { var k = U.dateKey(t.created_at); if (!seen[k]) { seen[k] = { date: k, items: [] }; groups.push(seen[k]); } seen[k].items.push(t); });
+    return topbar('Laporan Audit') + '<div class="page">' +
+      '<div class="period-card"><div class="chips">' + presets.map(function (p) { return '<button class="chip ' + (preset === p[0] ? 'active' : '') + '" data-action="audit-preset" data-p="' + p[0] + '">' + p[1] + '</button>'; }).join('') + '</div>' +
+      '<div class="period-row"><label>Dari tanggal<input type="date" id="audit-from" class="date-input boxed" value="' + esc(from) + '" max="' + today + '"></label>' +
+      '<label>Sampai tanggal<input type="date" id="audit-to" class="date-input boxed" value="' + esc(to) + '" max="' + today + '"></label></div>' +
+      '<p class="small muted">Menampilkan: <b>' + periodLabel(from, to) + '</b> · ' + r.count + ' catatan</p></div>' +
+      (tooOld ? '<div class="notice">' + I('info', 18) + '<span>Sebagian tanggal lebih lama dari ' + Cloud.historyDays + ' hari sehingga tidak dimuat di HP. Angka bisa tidak lengkap.</span></div>' : '') +
+      '<div class="share-row"><button class="btn btn-outline" data-action="export-audit">' + I('download', 18) + ' Unduh Excel</button>' +
+      '<button class="btn btn-wa" data-action="send-wa-audit">' + I('chat', 18) + ' WhatsApp</button></div>' +
+      (db.settings.storeWa ? '<p class="tiny muted center">WhatsApp ke ' + esc(db.settings.storeWa) + '</p>' : '') +
+      '<div class="kpi-grid">' + kpi('Penjualan', rp(r.sales), r.sale_count + ' transaksi', 'base') +
+      kpi('Laba kotor', rp(r.gross), 'margin ' + fmtPct(r.gross_pct), r.gross >= 0 ? 'ok' : 'danger') +
+      kpi('Biaya operasional', rp(r.expense), 'porsi ' + fmtPct(r.opex_pct), 'warn') +
+      kpi('Laba bersih', rp(r.net), 'margin ' + fmtPct(r.net_pct), r.net >= 0 ? 'ok' : 'danger') + '</div>' +
+      '<p class="label">TEMUAN AUDIT</p>' + finds.map(function (f) {
+        return '<div class="finding tone-bg-' + f.tone + '"><span class="f-ic">' + I(f.icon, 20) + '</span><p><b>' + esc(f.title) + '</b><span class="small">' + esc(f.text) + '</span></p></div>';
+      }).join('') +
+      analysisCard(r, from, to) +
+      (r.products.length ? '<p class="label">PRODUK PALING MENGUNTUNGKAN</p><div class="card">' + r.products.slice(0, 5).map(function (p, i) {
+        return '<div class="kv"><span>' + (i + 1) + '. ' + esc(p.name) + ' <span class="tiny muted">' + p.qty + ' porsi</span></span><span class="nw"><b>' + rp(p.profit) + '</b> <span class="muted small">(' + fmtPct(p.margin_pct) + ')</span></span></div>';
+      }).join('') + '</div>' : '') +
+      '<p class="label">RINCIAN AKTIVITAS</p><div class="chips sticky-chips">' + AUDIT_FILTERS.map(function (f) { return '<button class="chip ' + (S.auditFilter === f[0] ? 'active' : '') + '" data-action="audit-filter" data-f="' + f[0] + '">' + f[1] + '</button>'; }).join('') + '</div>' +
       '<label class="search">' + I('search', 18) + '<input id="audit-q" type="search" placeholder="Cari no. struk, kasir, produk, catatan" value="' + esc(S.auditQ) + '"></label>' +
-      '<p class="muted small">' + list.length + ' catatan · ketuk untuk melihat rincian. Catatan tidak bisa dihapus, hanya dibatalkan oleh pemilik dengan alasan.</p>' +
-      (list.length ? '<div class="txn-list">' + list.slice(0, 300).map(function (t) { return txnCard(t, { action: 'audit-open', open: S.auditOpen === t.id }); }).join('') + '</div>'
-        : '<div class="empty big">' + I('clipboard', 38) + '<p>Tidak ada data</p></div>') + '</div>';
+      '<p class="muted small">' + list.length + ' catatan · ketuk untuk rincian. Catatan tidak bisa dihapus, hanya dibatalkan pemilik dengan alasan.</p>' +
+      (groups.length ? groups.map(function (g) {
+        var d = r.days[g.date];
+        return '<div class="day-head"><span>' + U.longDate(g.date) + '</span><span class="muted small">' + (d ? 'Laba bersih ' + rp(d.sales - d.cost - d.expense) : '') + '</span></div>' +
+          '<div class="txn-list">' + g.items.map(function (t) { return txnCard(t, { action: 'audit-open', open: S.auditOpen === t.id, compact: true }); }).join('') + '</div>';
+      }).join('') + (list.length > 300 ? '<p class="muted small center">Menampilkan 300 catatan terbaru. Unduh Excel untuk semuanya.</p>' : '')
+        : '<div class="empty big">' + I('clipboard', 38) + '<p>Tidak ada data pada pilihan ini</p></div>') + '</div>';
   }
 
   function productRow(p) {
@@ -641,8 +799,8 @@
           : '<label class="btn btn-outline file-btn">' + I('upload', 18) + ' Pulihkan dari cadangan<input type="file" id="restore-file" accept="application/json,.json" hidden></label>') +
         (Cloud.enabled ? '' : '<button class="btn btn-danger-soft" data-action="reset-all">' + I('trash', 18) + ' Hapus semua data & mulai dari awal</button>') + '</div>';
     }
-    return h + (Cloud.enabled ? '<p class="tiny muted center">Kantin Insya v1.3 · mode cloud · ' + db.transactions.length + ' catatan (' + Cloud.historyDays + ' hari terakhir)</p></div>'
-      : '<p class="tiny muted center">Kantin Insya v1.3 · ' + db.transactions.length + ' catatan · penyimpanan ±' + Store.sizeKB() + ' KB dari ±5.000 KB</p></div>');
+    return h + (Cloud.enabled ? '<p class="tiny muted center">Kantin Insya v1.4 · mode cloud · ' + db.transactions.length + ' catatan (' + Cloud.historyDays + ' hari terakhir)</p></div>'
+      : '<p class="tiny muted center">Kantin Insya v1.4 · ' + db.transactions.length + ' catatan · penyimpanan ±' + Store.sizeKB() + ' KB dari ±5.000 KB</p></div>');
   }
 
   function tabbar(r) {
@@ -872,36 +1030,93 @@
     location.hash = '#/kasir';
     render();
   }
-  function exportReport() {
-    var d = S.reportDate, r = report(d);
-    var rows = [['Laporan Harian ' + db.settings.storeName], ['Tanggal', d], [], ['Metrik', 'Nilai (Rp)'],
-      ['Penjualan', r.total_sales], ['Modal barang terjual (HPP)', r.total_cost], ['Laba kotor', r.gross_profit], ['Margin kotor (%)', r.margin_pct], ['Biaya operasional', r.expense_total],
-      ['Laba bersih', r.net_profit], ['Selisih kas hari ini', r.variance], ['Laba bersih setelah selisih kas', r.net_after_variance], [],
-      ['Modal masuk', r.modal_in_total], ['Belanja stok', r.purchase_total], ['Prive', r.draw_total], [],
-      ['Kas awal', r.opening_cash], ['+ Modal masuk (laci)', r.modal_laci], ['+ Penjualan tunai', r.by_method.tunai], ['- Belanja stok (laci)', r.purchase_laci],
-      ['- Biaya operasional (laci)', r.expense_laci], ['- Prive (laci)', r.draw_laci], ['Seharusnya di laci', r.expected_cash], [],
-      ['Jumlah transaksi', r.sale_count], ['Item terjual', r.item_count], ['Transaksi dibatalkan', r.void_count], ['Nilai dibatalkan', r.void_total], [], ['Metode', 'Total (Rp)']];
-    ['tunai', 'qris', 'transfer'].forEach(function (m) { rows.push([pmLabel(m), r.by_method[m] || 0]); });
-    rows.push([], ['Produk terlaris', 'Qty']);
-    r.top_products.forEach(function (p) { rows.push([p.name, p.qty]); });
-    rows.push([], ['Rincian transaksi'], ['Waktu', 'No', 'Jenis', 'Kasir', 'Metode', 'Item', 'Jumlah', 'HPP', 'Catatan', 'Status', 'Sumber uang']);
-    db.transactions.filter(function (t) { return U.dateKey(t.created_at) === d && t.kind !== 'log'; }).forEach(function (t) { rows.push(txnRow(t)); });
-    U.download('laporan-' + d + '.csv', U.csv(rows), 'text/csv;charset=utf-8');
-    toast('Laporan CSV diunduh', 'ok');
+  /* ---------- Ekspor Excel (.xlsx) ---------- */
+  function xrp(v) { return { v: v, s: 'rp' }; }
+  function xrpb(v) { return { v: v, s: 'rpb' }; }
+  function xpc(v) { return { v: v / 100, s: 'pct' }; }   /* v dalam satuan persen */
+  function xh(a) { return a.map(function (x) { return { v: x, s: 'h' }; }); }
+  function xsub(a) { return a.map(function (x) { return { v: x, s: 'sub' }; }); }
+  function signedAmount(t) {
+    if (t.kind === 'sale') return t.subtotal;
+    if (t.kind === 'modal_in') return t.amount;
+    if (t.kind === 'expense' || t.kind === 'purchase' || t.kind === 'owner_draw') return -t.amount;
+    if (t.kind === 'closing') return t.diff;
+    return null;
   }
-  function txnRow(t) {
-    var amount = t.kind === 'sale' ? t.subtotal : t.kind === 'closing' ? t.diff : (t.amount || '');
-    var note = t.kind === 'closing' ? 'Seharusnya ' + t.expected + ', dihitung ' + t.actual + (t.note ? '. ' + t.note : '') : (t.note || '');
-    return [U.dateTime(t.created_at), t.no || '', kindInfo(t).label, t.cashier, t.payment_method ? pmLabel(t.payment_method) : '',
-      (t.items || []).map(function (i) { return i.qty + 'x ' + i.name; }).join('; '), amount, t.cost_total || '', note,
-      t.voided ? 'DIBATALKAN: ' + t.void_reason + ' (' + t.voided_by + ')' : 'OK', t.source === 'rekening' ? 'Rekening' : (['modal_in', 'purchase', 'expense', 'owner_draw'].indexOf(t.kind) >= 0 ? 'Laci' : '')];
+  function detailSheet(list, name) {
+    var rows = [xh(['Tanggal', 'Jam', 'No. struk', 'Jenis', 'Kasir', 'Metode', 'Item', 'Jumlah (+/-)', 'Modal barang (HPP)', 'Laba', 'Sumber uang', 'Catatan', 'Status'])];
+    list.forEach(function (t) {
+      var a = signedAmount(t), sale = t.kind === 'sale';
+      rows.push([U.dateKey(t.created_at), U.time(t.created_at), t.no || '', kindInfo(t).label, t.cashier, t.payment_method ? pmLabel(t.payment_method) : '',
+        (t.items || []).map(function (i) { return i.qty + 'x ' + i.name; }).join('; '), a === null ? '' : xrp(a), sale ? xrp(t.cost_total || 0) : '', sale ? xrp(t.subtotal - (t.cost_total || 0)) : '',
+        ['modal_in', 'purchase', 'expense', 'owner_draw'].indexOf(t.kind) >= 0 ? (t.source === 'rekening' ? 'Rekening' : 'Laci') : '',
+        t.kind === 'closing' ? 'Seharusnya ' + t.expected + ', dihitung ' + t.actual + (t.note ? '. ' + t.note : '') : (t.note || ''),
+        t.voided ? 'DIBATALKAN: ' + (t.void_reason || '-') + ' (' + (t.voided_by || '-') + ')' : 'OK']);
+    });
+    return { name: name || 'Rincian', rows: rows, widths: [12, 8, 22, 22, 14, 11, 40, 16, 18, 14, 13, 40, 36], freeze: 1, filter: true };
+  }
+  function productSheet(r) {
+    var rows = [xh(['Produk', 'Terjual (porsi)', 'Penjualan', 'Modal barang (HPP)', 'Laba', 'Margin', 'Kontribusi ke laba kotor'])];
+    r.products.forEach(function (p) { rows.push([p.name, p.qty, xrp(p.revenue), xrp(p.cost), xrp(p.profit), xpc(p.margin_pct), r.gross > 0 ? xpc(p.profit / r.gross * 100) : '']); });
+    if (r.products.length) rows.push([{ v: 'TOTAL', s: 'b' }, { v: r.item_count, s: 'b' }, xrpb(r.sales), xrpb(r.cost), xrpb(r.gross), { v: r.gross_pct / 100, s: 'pct' }, '']);
+    return { name: 'Per Produk', rows: rows, widths: [28, 16, 16, 20, 16, 12, 24], freeze: 1 };
+  }
+  function profitRows(r) {
+    var rows = [xsub(['LABA RUGI', 'Nilai', 'Penjelasan']),
+      ['Penjualan', xrp(r.sales), 'Uang dari penjualan, tidak termasuk yang dibatalkan'],
+      ['Modal barang terjual (HPP)', xrp(r.cost), 'Modal barang yang sudah terjual'],
+      [{ v: 'Laba kotor', s: 'b' }, xrpb(r.gross), 'Penjualan - HPP'],
+      ['Biaya operasional', xrp(r.expense), 'Gas, listrik, gaji, kebersihan, dan sejenisnya'],
+      [{ v: 'Laba bersih', s: 'b' }, xrpb(r.net), 'Laba kotor - Biaya operasional'], [],
+      xsub(['PERSENTASE LABA', 'Nilai', 'Cara menghitung dan artinya']),
+      ['Margin kotor', xpc(r.gross_pct), 'Laba kotor / Penjualan. Sisa tiap Rp100 penjualan setelah modal barang'],
+      ['Margin bersih', xpc(r.net_pct), 'Laba bersih / Penjualan. Sisa tiap Rp100 penjualan setelah modal barang dan biaya'],
+      ['Markup', r.markup_pct === null ? '-' : xpc(r.markup_pct), 'Laba kotor / HPP. Kenaikan harga jual dari modal'],
+      ['Porsi modal barang (HPP)', xpc(r.cogs_pct), 'HPP / Penjualan'],
+      ['Porsi biaya operasional', xpc(r.opex_pct), 'Biaya / Penjualan'],
+      ['Titik impas (penjualan minimum)', r.breakeven === null ? '-' : xrp(r.breakeven), 'Biaya operasional / Margin kotor. Penjualan minimum agar biaya tertutup'], [],
+      xsub(['DI LUAR LABA', 'Nilai', 'Penjelasan']),
+      ['Modal masuk', xrp(r.modal_in), 'Setoran pemilik, bukan pendapatan'],
+      ['Belanja stok', xrp(r.purchase), 'Aset persediaan; menjadi biaya lewat HPP saat terjual'],
+      ['Prive', xrp(r.draw), 'Uang diambil pemilik, bukan biaya usaha'],
+      ['Selisih kas (tutup kas)', xrp(r.variance), 'Negatif = uang kurang; ditampilkan terpisah dari laba'], [],
+      xsub(['PEMBAYARAN', 'Nilai', '']), ['Tunai', xrp(r.by_method.tunai)], ['QRIS', xrp(r.by_method.qris)], ['Transfer', xrp(r.by_method.transfer)]];
+    return rows;
+  }
+  function exportReport() {
+    var d = S.reportDate, r = report(d), rr = rangeReport(d, d);
+    var rows = [[{ v: 'Laporan Harian — ' + db.settings.storeName, s: 'title' }], ['Tanggal', U.longDate(d)], ['Dibuat', U.dateTime(new Date().toISOString()) + ' oleh ' + S.user.username], [],
+      xsub(['UANG TUNAI DI LACI', 'Nilai', 'Penjelasan']),
+      ['Kas awal', xrp(r.opening_cash), r.opening_estimated ? 'Perkiraan (belum ada tutup kas sebelumnya)' : 'Hasil tutup kas terakhir'],
+      ['+ Modal masuk (laci)', xrp(r.modal_laci)], ['+ Penjualan tunai', xrp(r.by_method.tunai)], ['- Belanja stok (laci)', xrp(r.purchase_laci)],
+      ['- Biaya operasional (laci)', xrp(r.expense_laci)], ['- Prive (laci)', xrp(r.draw_laci)], [{ v: 'Seharusnya ada di laci', s: 'b' }, xrpb(r.expected_cash), 'Menurut catatan']];
+    r.closings.forEach(function (c) { rows.push(['Tutup kas ' + U.time(c.created_at) + ' (' + c.cashier + ')', xrp(c.actual), 'Dihitung. Hasil: ' + txnAmount(c)]); });
+    rows.push([], [{ v: 'Transaksi dibatalkan', s: 'b' }, rr.voids.length, rr.void_total ? 'Nilai penjualan: Rp ' + rr.void_total : '']);
+    rows.push([], [{ v: 'Penjualan bukan tunai (QRIS/transfer) masuk ke rekening, bukan laci.', s: 'note' }], []);
+    var detail = db.transactions.filter(function (t) { return U.dateKey(t.created_at) === d && t.kind !== 'log'; });
+    Xlsx.download('laporan-harian-' + d + '.xlsx', [
+      { name: 'Ringkasan', rows: [rows[0], rows[1], rows[2], []].concat(profitRows(rr), [[]], rows.slice(4)), widths: [38, 18, 60] },
+      productSheet(rr), detailSheet(detail)]);
+    toast('Laporan Excel diunduh', 'ok');
   }
   function exportAudit() {
-    var rows = [['Waktu', 'No', 'Jenis', 'Kasir', 'Metode', 'Item', 'Jumlah', 'HPP', 'Catatan', 'Status', 'Sumber uang']];
-    db.transactions.slice().reverse().forEach(function (t) { rows.push(txnRow(t)); });
-    U.download('audit-' + U.todayKey() + '.csv', U.csv(rows), 'text/csv;charset=utf-8');
-    toast('Audit CSV diunduh', 'ok');
+    var from = S.auditFrom, to = S.auditTo, r = rangeReport(from, to), finds = auditFindings(r), label = periodLabel(from, to);
+    var tones = { danger: 'Perlu tindakan', warn: 'Perlu dicek', info: 'Info', ok: 'Baik' };
+    var rows = [[{ v: 'Laporan Audit — ' + db.settings.storeName, s: 'title' }], ['Periode', label], ['Dibuat', U.dateTime(new Date().toISOString()) + ' oleh ' + S.user.username], []]
+      .concat(profitRows(r), [[]], [xsub(['TEMUAN AUDIT', 'Status', 'Keterangan'])]);
+    finds.forEach(function (f) { rows.push([f.title, tones[f.tone], f.text]); });
+    var days = [xh(['Tanggal', 'Transaksi', 'Penjualan', 'Modal barang (HPP)', 'Laba kotor', 'Margin kotor', 'Biaya operasional', 'Laba bersih', 'Margin bersih'])];
+    r.day_list.forEach(function (d) { days.push([d.date, d.sale_count, xrp(d.sales), xrp(d.cost), xrp(d.gross), d.sales ? xpc(d.gross / d.sales * 100) : '', xrp(d.expense), xrp(d.net), d.sales ? xpc(d.net / d.sales * 100) : '']); });
+    if (r.day_list.length) days.push([{ v: 'TOTAL', s: 'b' }, { v: r.sale_count, s: 'b' }, xrpb(r.sales), xrpb(r.cost), xrpb(r.gross), { v: r.gross_pct / 100, s: 'pct' }, xrpb(r.expense), xrpb(r.net), { v: r.net_pct / 100, s: 'pct' }]);
+    var list = db.transactions.filter(function (t) { var k = U.dateKey(t.created_at); return !((from && k < from) || (to && k > to)); });
+    var name = from || to ? 'audit-' + (from || 'awal') + '_sd_' + (to || 'sekarang') : 'audit-semua-tanggal';
+    Xlsx.download(name + '.xlsx', [
+      { name: 'Ringkasan', rows: rows, widths: [38, 18, 70] },
+      { name: 'Per Hari', rows: days, widths: [13, 11, 16, 20, 16, 13, 18, 16, 13], freeze: 1 },
+      productSheet(r), detailSheet(list)]);
+    toast('Audit Excel diunduh', 'ok');
   }
+
   function confirmSheet(opts) { S.sheet = Object.assign({ type: 'confirm' }, opts); renderOverlay(); }
 
   var actions = {
@@ -965,8 +1180,8 @@
     'qris-show': function () { S.drawer = false; S.sheet = { type: 'qris' }; renderOverlay(); },
     'clear-qris': function () { confirmSheet({ title: 'Hapus gambar QRIS?', message: 'Gambar QRIS tidak akan tampil lagi di layar kasir. Anda bisa mengunggahnya lagi.', confirmLabel: 'Hapus', act: 'clear-qris' }); },
     'send-wa-report': function () { sendWa(reportText(S.reportDate)); },
-    'send-wa-audit': function () { sendWa(auditText(S.auditDate || U.todayKey())); },
-    'audit-all': function () { S.auditDate = ''; S.auditOpen = null; render(); },
+    'send-wa-audit': function () { sendWa(auditText(S.auditFrom, S.auditTo)); },
+    'audit-preset': function (d) { var x = presetRange(d.p); S.auditFrom = x[0]; S.auditTo = x[1]; S.auditOpen = null; render(); },
     'del-product': function (d) {
       var p = product(d.id); if (!p) return;
       confirmSheet({ title: 'Hapus produk?', message: '"' + p.name + '" tidak akan tampil lagi di kasir. Riwayat penjualannya tetap tersimpan.', confirmLabel: 'Hapus', act: 'del-product', id: p.id });
@@ -1174,7 +1389,12 @@
   });
   document.addEventListener('change', function (e) {
     var t = e.target;
-    if (t.id === 'audit-date') { S.auditDate = t.value > U.todayKey() ? U.todayKey() : t.value; S.auditOpen = null; render(); }
+    if (t.id === 'audit-from' || t.id === 'audit-to') {
+      var tk = U.todayKey(), v = t.value > tk ? tk : t.value;
+      if (t.id === 'audit-from') S.auditFrom = v; else S.auditTo = v;
+      if (S.auditFrom && S.auditTo && S.auditFrom > S.auditTo) { var sw = S.auditFrom; S.auditFrom = S.auditTo; S.auditTo = sw; }
+      S.auditOpen = null; render();
+    }
     if (t.id === 'product-photo' && t.files[0] && S.sheet && S.sheet.type === 'product') {
       var pf = t.files[0]; t.value = '';
       resizeImage(pf, 256, 'image/jpeg', 0.72).then(function (u) { if (S.sheet && S.sheet.type === 'product') { S.sheet.photo = u; updatePhotoPreview(); } })
