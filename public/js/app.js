@@ -414,6 +414,7 @@
       '<section class="intro"><p class="muted small">' + greeting() + ', ' + esc(S.user.username) + '</p>' +
       '<div class="intro-row"><h2 class="display hero">Mau makan apa hari ini?</h2>' +
       '<label class="search">' + I('search', 18) + '<input id="search" type="search" placeholder="Cari makanan atau minuman" value="' + esc(S.q) + '" autocomplete="off"></label></div></section>' +
+      '<label class="search"><span class="small">#</span><input id="barcode-scan" type="text" placeholder="Scan barcode produk lalu tekan Enter" autocomplete="off"></label>' +
       '<div class="chips" role="tablist">' + ['Semua'].concat(db.categories).map(function (c) {
         return '<button class="chip ' + (S.cat === c ? 'active' : '') + '" data-action="cat" data-cat="' + esc(c) + '">' + esc(c) + '</button>';
       }).join('') + '</div>' +
@@ -427,7 +428,8 @@
   function filteredProducts() {
     var q = S.q.trim().toLowerCase();
     return db.products.filter(function (p) {
-      return !p.archived && (S.cat === 'Semua' || p.category === S.cat) && (!q || p.name.toLowerCase().indexOf(q) >= 0);
+      return !p.archived && (S.cat === 'Semua' || p.category === S.cat) &&
+        (!q || p.name.toLowerCase().indexOf(q) >= 0 || String(p.barcode || '').toLowerCase().indexOf(q) >= 0);
     });
   }
   function productList() {
@@ -845,7 +847,7 @@
         '<div class="btn-row"><button type="button" class="btn btn-outline" data-action="close-sheet">Batal</button><button type="submit" class="btn btn-danger">' + esc(sh.confirmLabel) + '</button></div></form>';
     } else if (sh.type === 'product') {
       var p = sh.id ? product(sh.id) : null;
-      p = p || { name: '', category: sh.category || db.categories[0] || '', price: '', cost: '', stock: 0, track_stock: true, description: '', icon: 'bowl' };
+      p = p || { name: '', category: sh.category || db.categories[0] || '', price: '', cost: '', stock: 0, track_stock: true, description: '', barcode: '', icon: 'bowl' };
       var photo = sh.photo !== undefined ? sh.photo : p.photo;
       body = '<h3 class="display">' + (sh.id ? 'Ubah Produk' : 'Tambah Produk') + '</h3><form data-form="product" class="stack">' +
         '<div class="photo-row"><div class="photo-box" id="photo-prev">' + photoInner(photo, p.icon) + '</div><div class="photo-actions">' +
@@ -855,6 +857,7 @@
         '<label class="field"><span>Nama produk</span><input name="name" class="input" value="' + esc(p.name) + '" maxlength="40" required></label>' +
         '<label class="field"><span>Kategori</span><select name="category" class="input" required>' + db.categories.map(function (c) { return '<option ' + (c === p.category ? 'selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '<option value="__new">+ Kategori baru…</option></select></label>' +
         '<label class="field" id="newcat-field" hidden><span>Nama kategori baru</span><input name="newcat" class="input" maxlength="30" placeholder="Mis. Gorengan"></label>' +
+        '<label class="field"><span>Barcode produk (opsional)</span><input name="barcode" class="input" value="' + esc(p.barcode || '') + '" maxlength="100" autocomplete="off" placeholder="Pindai atau ketik barcode"></label>' +
         '<div class="grid2"><label class="field"><span>Harga jual (Rp)</span><input name="price" class="input" inputmode="numeric" value="' + (p.price ? U.num(p.price) : '') + '" required></label>' +
         '<label class="field"><span>Modal / HPP per porsi (Rp)</span><input name="cost" class="input" inputmode="numeric" value="' + (p.cost ? U.num(p.cost) : '') + '"></label></div>' +
         '<div class="grid2"><label class="field"><span>Stok</span><input name="stock" class="input" inputmode="numeric" value="' + (p.stock || 0) + '"></label>' +
@@ -967,11 +970,25 @@
 
   /* ---------------- Aksi ---------------- */
   function addToCart(id) {
-    var p = product(id); if (!p) return;
+    var p = product(id); if (!p) return false;
     var c = S.cart.find(function (x) { return x.id === id; });
     var qty = c ? c.qty : 0;
-    if (p.track_stock && qty + 1 > p.stock) { toast('Stok ' + p.name + ' tinggal ' + p.stock, 'error'); return; }
+    if (p.track_stock && qty + 1 > p.stock) { toast('Stok ' + p.name + ' tinggal ' + p.stock, 'error'); return false; }
     if (c) c.qty++; else S.cart.push({ id: p.id, name: p.name, price: p.price, qty: 1 });
+    return true;
+  }
+  function normalizeBarcode(value) { return String(value == null ? '' : value).trim().toLowerCase(); }
+  function addBarcodeToCart(value) {
+    var barcode = normalizeBarcode(value);
+    if (!barcode) return;
+    var p = db.products.find(function (item) { return !item.archived && normalizeBarcode(item.barcode) === barcode; });
+    if (!p) { toast('Barcode produk tidak ditemukan', 'error'); return; }
+    if (!addToCart(p.id)) return;
+    S.q = '';
+    render();
+    var scan = document.getElementById('barcode-scan');
+    if (scan) scan.focus();
+    toast(p.name + ' ditambahkan', 'ok');
   }
   function doPay() {
     if (!canPay()) return;
@@ -1259,6 +1276,10 @@
       if (!isOwner()) return;
       var sh = S.sheet, price = U.parseRp(f.price.value), cost = U.parseRp(f.cost.value), stock = parseInt(String(f.stock.value).replace(/[^\d-]/g, ''), 10) || 0;
       if (!f.name.value.trim() || price <= 0) { toast('Nama dan harga jual wajib diisi', 'error'); return; }
+      var barcode = String(f.barcode.value || '').trim(), barcodeKey = normalizeBarcode(barcode);
+      if (barcodeKey && db.products.some(function (p) { return !p.archived && p.id !== sh.id && normalizeBarcode(p.barcode) === barcodeKey; })) {
+        toast('Barcode sudah dipakai produk lain', 'error'); return;
+      }
       if (cost > price) toast('Perhatian: modal lebih besar dari harga jual', 'error');
       var cat = f.category.value;
       if (cat === '__new') {
@@ -1267,11 +1288,11 @@
         var ex = db.categories.find(function (c) { return c.toLowerCase() === nn.toLowerCase(); });
         if (ex) cat = ex; else { db.categories.push(nn); logEvent('Kategori baru: ' + nn); cat = nn; }
       }
-      var data = { name: f.name.value.trim(), category: cat, price: price, cost: cost, stock: stock, track_stock: f.track_stock.checked, description: f.description.value.trim(), icon: f.icon.value };
+      var data = { name: f.name.value.trim(), category: cat, barcode: barcode, price: price, cost: cost, stock: stock, track_stock: f.track_stock.checked, description: f.description.value.trim(), icon: f.icon.value };
       if (sh.photo !== undefined) data.photo = sh.photo;
       var id = sh.id;
       if (id && sh.init) {   /* edit bersamaan: jangan menimpa kolom yang tidak Anda ubah (mis. stok yang sudah berubah karena penjualan) */
-        Object.keys(data).forEach(function (k) { if (JSON.stringify(data[k]) === JSON.stringify(sh.init[k] === undefined ? (k === 'photo' ? '' : sh.init[k]) : sh.init[k])) delete data[k]; });
+        Object.keys(data).forEach(function (k) { if (JSON.stringify(data[k]) === JSON.stringify(sh.init[k] === undefined ? (k === 'photo' || k === 'barcode' ? '' : sh.init[k]) : sh.init[k])) delete data[k]; });
       }
       if (id) {
         var p = product(id), changes = [];
@@ -1439,6 +1460,12 @@
     toast('Data dipulihkan', 'ok');
   };
   document.addEventListener('keydown', function (e) {
+    if (e.target && e.target.id === 'barcode-scan' && e.key === 'Enter') {
+      e.preventDefault();
+      var barcode = e.target.value;
+      e.target.value = '';
+      addBarcodeToCart(barcode);
+    }
     if (e.key === 'Escape') { if (S.sheet) closeSheet(); else if (S.drawer) { S.drawer = false; renderOverlay(); } }
   });
   window.addEventListener('hashchange', function () { S.drawer = false; render(); });
