@@ -513,3 +513,27 @@ body[data-route="pesanan"] .main { padding-bottom: calc(var(--tabbar-h) + var(--
 
 /* Atribut hidden harus menang atas gaya tombol/kolom (mis. "Hapus foto" dan "Tambah produk ini" yang sengaja disembunyikan). */
 [hidden] { display: none !important; }
+
+/* Ringkasan persediaan di menu Produk */
+.stock-kpi { margin-bottom: 8px; }
+.stock-gain { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 14px; }
+.stock-gain b { font-size: 15px; } .stock-gain b.ok { color: var(--ok); }
+.stock-note { margin: 8px 2px 12px; line-height: 1.5; }
+.incomplete-card { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font: inherit; color: var(--on-surface); cursor: pointer; background: rgba(184, 127, 37, .12); border: 1px solid var(--warn); border-radius: var(--r-md); padding: 12px 14px; margin-bottom: 12px; }
+.incomplete-card > svg { flex: none; color: var(--warn); }
+.incomplete-card .ic-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.incomplete-card .ic-text b { font-size: 14px; }
+.incomplete-card .ic-act { flex: none; font-size: 12px; font-weight: 700; color: var(--brand); background: var(--card); border-radius: var(--pill); padding: 4px 12px; }
+.incomplete-card.active { background: var(--brand-soft); border-color: var(--brand); }
+.ok-notice { margin-top: 0; margin-bottom: 12px; } .ok-notice svg { color: var(--ok); flex: none; }
+
+/* Ringkasan fungsi modal di menu Modal */
+.fund-grid { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 18px; }
+.fund-card { background: var(--card); border: 1px solid var(--border); border-left-width: 4px; border-radius: var(--r-md); padding: 14px; min-width: 0; }
+.fund-card.t-base { border-left-color: var(--brand); } .fund-card.t-ok { border-left-color: var(--ok); } .fund-card.t-warn { border-left-color: var(--warn); }
+.fund-card .eyebrow { letter-spacing: .08em; margin: 0; }
+.fund-card p { margin: 0; }
+.fund-val { font-size: 24px; line-height: 1.2; margin-top: 4px; overflow-wrap: anywhere; }
+.fund-rows { margin-top: 10px; border-top: 1px solid var(--divider); padding-top: 4px; }
+.fund-rows .kv { padding: 6px 0; font-size: 13.5px; }
+.fund-note { margin-top: 8px; line-height: 1.5; }
