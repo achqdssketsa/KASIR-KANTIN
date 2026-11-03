@@ -5,7 +5,7 @@ var BUILD = 'dev';
 var CACHE = 'kantin-insya-' + BUILD;
 var FONT_CACHE = 'kantin-insya-fonts';
 var CORE = [
-  './', './index.html', './css/style.css', './js/store.js', './js/firebase-config.js', './js/cloud.js', './js/xlsx.js', './js/app.js', './manifest.webmanifest',
+  './', './index.html', './css/style.css', './js/store.js', './js/firebase-config.js', './js/cloud.js', './js/xlsx.js', './js/barcode.js', './js/app.js', './manifest.webmanifest',
   './assets/icon.svg', './assets/icon-192.png', './assets/icon-512.png', './assets/icon-maskable-512.png',
   './assets/apple-touch-icon.png', './assets/favicon-48.png'
 ];
@@ -27,7 +27,7 @@ self.addEventListener('fetch', function (e) {
 
   /* Font Google: disimpan saat pertama kali online, dipakai terus saat offline. */
   /* SDK Firebase (dipakai mode cloud): disimpan saat pertama online agar aplikasi tetap terbuka saat offline. */
-  if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com' || (url.hostname === 'www.gstatic.com' && url.pathname.indexOf('/firebasejs/') === 0)) {
+  if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com' || (url.hostname === 'www.gstatic.com' && url.pathname.indexOf('/firebasejs/') === 0) || (url.hostname === 'cdn.jsdelivr.net' && url.pathname.indexOf('/npm/@zxing/') === 0)) {
     e.respondWith(caches.open(FONT_CACHE).then(function (cache) {
       return cache.match(req).then(function (hit) {
         if (hit) return hit;
