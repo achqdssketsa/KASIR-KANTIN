@@ -784,6 +784,56 @@
       (blocks || '<div class="empty">' + I('box', 32) + '<p>Belum ada kategori. Mulai dengan menambah kategori, mis. Nasi, Minuman, Camilan.</p></div>') + '</div>';
   }
 
+
+  /* ---------- Ringkasan fungsi modal: saldo kas, modal kerja, operasional ---------- */
+  function fundSummary() {
+    var today = U.todayKey(), mon = today.slice(0, 7);
+    var r = { laci: cashExpectedNow(), bank: 0, modalIn: 0, draw: 0, purchase: 0, opexToday: 0, opexMonth: 0, opexAll: 0, salesMonth: 0, stock: inventoryValue(), dayNo: parseInt(today.slice(8), 10) || 1 };
+    db.transactions.forEach(function (t) {
+      if (t.voided) return;
+      var k = U.dateKey(t.created_at), rek = (t.source || 'laci') !== 'laci', amt = t.amount || 0;
+      if (t.kind === 'sale') {
+        if (t.payment_method !== 'tunai') r.bank += t.subtotal;
+        if (k.slice(0, 7) === mon) r.salesMonth += t.subtotal;
+      } else if (t.kind === 'modal_in') { r.modalIn += amt; if (rek) r.bank += amt; }
+      else if (t.kind === 'purchase') { r.purchase += amt; if (rek) r.bank -= amt; }
+      else if (t.kind === 'owner_draw') { r.draw += amt; if (rek) r.bank -= amt; }
+      else if (t.kind === 'expense') {
+        r.opexAll += amt; if (rek) r.bank -= amt;
+        if (k === today) r.opexToday += amt;
+        if (k.slice(0, 7) === mon) r.opexMonth += amt;
+      }
+    });
+    r.cash = r.laci + r.bank;
+    r.working = r.cash + r.stock;
+    return r;
+  }
+  function fundCard(tone, label, big, sub, rows, note) {
+    return '<section class="fund-card t-' + tone + '"><p class="eyebrow">' + label + '</p><p class="display fund-val ' + (big < 0 ? 'bad' : '') + '">' + rp(big) + '</p><p class="small muted">' + sub + '</p>' +
+      '<div class="fund-rows">' + rows.map(function (x) { return '<div class="kv"><span>' + x[0] + '</span><span class="' + (x[2] || '') + '">' + x[1] + '</span></div>'; }).join('') + '</div>' +
+      (note ? '<p class="tiny muted fund-note">' + note + '</p>' : '') + '</section>';
+  }
+  function fundPanel() {
+    var f = fundSummary(), pct = f.salesMonth ? fmtPct(f.opexMonth / f.salesMonth * 100) : '-';
+    return '<p class="label">RINGKASAN MODAL</p><div class="fund-grid">' +
+      fundCard('base', 'SALDO KAS', f.cash, 'uang yang tersedia saat ini', [
+        ['Tunai di laci (perkiraan)', rp(f.laci), f.laci < 0 ? 'bad' : ''],
+        ['Rekening / e-wallet (tercatat)', rp(f.bank), f.bank < 0 ? 'bad' : '']
+      ], 'Laci dihitung dari tutup kas terakhir lalu dicocokkan dengan penjualan tunai dan catatan di bawah. Rekening dihitung dari QRIS, transfer, dan catatan bersumber rekening, bukan saldo bank sebenarnya.') +
+      fundCard('ok', 'MODAL KERJA', f.working, 'kas ditambah barang dagangan', [
+        ['Saldo kas', rp(f.cash)],
+        ['Persediaan barang (modal)', rp(f.stock)],
+        ['Modal disetor pemilik', rp(f.modalIn)],
+        ['Prive (diambil pemilik)', rp(f.draw)]
+      ], 'Modal kerja = uang siap pakai + stok barang bermodal. Utang dan piutang tidak dicatat di aplikasi ini.') +
+      fundCard('warn', 'OPERASIONAL', f.opexMonth, 'biaya operasional bulan ini', [
+        ['Hari ini', rp(f.opexToday)],
+        ['Rata-rata per hari (bulan ini)', rp(Math.round(f.opexMonth / f.dayNo))],
+        ['Porsi dari penjualan bulan ini', pct],
+        ['Total semua catatan', rp(f.opexAll)]
+      ], 'Hanya catatan Biaya (gas, listrik, gaji, dll). Belanja stok tidak termasuk karena masuk lewat HPP.') + '</div>';
+  }
+
   function viewModal() {
     var today = U.todayKey(), kinds = [['modal_in', 'down', 'Modal Masuk'], ['purchase', 'box', 'Belanja Stok'], ['expense', 'up', 'Biaya'], ['owner_draw', 'up', 'Prive']];
     var hints = {
@@ -793,8 +843,8 @@
       owner_draw: 'Uang yang diambil pemilik untuk keperluan pribadi. Mengurangi uang di laci, tetapi bukan biaya usaha.'
     };
     var list = db.transactions.filter(function (t) { return ['modal_in', 'purchase', 'expense', 'owner_draw'].indexOf(t.kind) >= 0 && U.dateKey(t.created_at) === today; }).slice().reverse();
-    return topbar('Modal & Pengeluaran') + '<div class="page narrow">' +
-      '<div class="seg seg4">' + kinds.map(function (k) {
+    return topbar('Modal & Pengeluaran') + '<div class="page narrow">' + fundPanel() +
+      '<p class="label">CATAT BARU</p><div class="seg seg4">' + kinds.map(function (k) {
         return '<button type="button" class="seg-btn ' + (S.modalKind === k[0] ? 'active' : '') + '" data-action="modal-kind" data-k="' + k[0] + '">' + I(k[1], 16) + ' ' + k[2] + '</button>';
       }).join('') + '</div>' +
       '<div class="notice">' + I('info', 18) + '<span>' + hints[S.modalKind] + '</span></div>' +
