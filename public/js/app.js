@@ -413,7 +413,7 @@
       '<button class="icon-btn" data-action="nav" data-to="riwayat" aria-label="Riwayat">' + I('clock') + '</button></span></header>' +
       '<section class="intro"><p class="muted small">' + greeting() + ', ' + esc(S.user.username) + '</p>' +
       '<div class="intro-row"><h2 class="display hero">Mau makan apa hari ini?</h2>' +
-      '<label class="search">' + I('search', 18) + '<input id="search" type="search" placeholder="Cari makanan atau minuman" value="' + esc(S.q) + '" autocomplete="off"></label></div></section>' +
+      '<label class="search">' + I('search', 18) + '<input id="search" type="search" placeholder="Cari makanan atau minuman" value="' + esc(S.q) + '" autocomplete="off"><button type="button" class="search-scan" data-action="scan-cart" aria-label="Scan barcode">' + I('camera', 20) + '</button></label></div></section>' +
       '<div class="chips" role="tablist">' + ['Semua'].concat(db.categories).map(function (c) {
         return '<button class="chip ' + (S.cat === c ? 'active' : '') + '" data-action="cat" data-cat="' + esc(c) + '">' + esc(c) + '</button>';
       }).join('') + '</div>' +
@@ -708,7 +708,7 @@
 
   function productRow(p) {
     return '<div class="txn"><div class="txn-main"><span class="product-thumb sm ' + (p.photo ? 'has-photo' : '') + '">' + (p.photo ? '<img src="' + p.photo + '" alt="" loading="lazy">' : I(p.icon || 'bowl', 22)) + '</span>' +
-      '<div class="txn-info"><h4>' + esc(p.name) + '</h4><p class="small muted">jual ' + rp(p.price) + ' · modal ' + rp(p.cost) + ' · ' + (p.track_stock ? 'stok ' + p.stock : 'stok tidak dilacak') + '</p>' +
+      '<div class="txn-info"><h4>' + esc(p.name) + '</h4><p class="small muted">jual ' + rp(p.price) + ' · modal ' + rp(p.cost) + ' · ' + (p.track_stock ? 'stok ' + p.stock : 'stok tidak dilacak') + (p.barcode ? ' · barcode ' + esc(p.barcode) : '') + '</p>' +
       (p.cost ? '' : '<p class="small bad">Modal belum diisi, laba bisa terlihat terlalu besar</p>') + '</div>' +
       '<div class="row-actions"><button class="step" data-action="edit-product" data-id="' + p.id + '" aria-label="Ubah ' + esc(p.name) + '">' + I('edit', 16) + '</button>' +
       '<button class="step danger" data-action="del-product" data-id="' + p.id + '" aria-label="Hapus ' + esc(p.name) + '">' + I('trash', 16) + '</button></div></div></div>';
@@ -799,8 +799,8 @@
           : '<label class="btn btn-outline file-btn">' + I('upload', 18) + ' Pulihkan dari cadangan<input type="file" id="restore-file" accept="application/json,.json" hidden></label>') +
         (Cloud.enabled ? '' : '<button class="btn btn-danger-soft" data-action="reset-all">' + I('trash', 18) + ' Hapus semua data & mulai dari awal</button>') + '</div>';
     }
-    return h + (Cloud.enabled ? '<p class="tiny muted center">Kantin Insya v1.4 · mode cloud · ' + db.transactions.length + ' catatan (' + Cloud.historyDays + ' hari terakhir)</p></div>'
-      : '<p class="tiny muted center">Kantin Insya v1.4 · ' + db.transactions.length + ' catatan · penyimpanan ±' + Store.sizeKB() + ' KB dari ±5.000 KB</p></div>');
+    return h + (Cloud.enabled ? '<p class="tiny muted center">Kantin Insya v1.5 · mode cloud · ' + db.transactions.length + ' catatan (' + Cloud.historyDays + ' hari terakhir)</p></div>'
+      : '<p class="tiny muted center">Kantin Insya v1.5 · ' + db.transactions.length + ' catatan · penyimpanan ±' + Store.sizeKB() + ' KB dari ±5.000 KB</p></div>');
   }
 
   function tabbar(r) {
@@ -852,6 +852,8 @@
         '<label class="btn btn-outline btn-sm file-btn">' + I('camera', 16) + ' <span id="photo-label">' + (photo ? 'Ganti foto' : 'Tambah foto') + '</span><input type="file" id="product-photo" accept="image/*" hidden></label>' +
         '<button type="button" class="btn btn-danger-soft btn-sm" id="photo-clear" data-action="clear-photo" ' + (photo ? '' : 'hidden') + '>Hapus foto</button>' +
         '<p class="tiny muted">Ambil foto atau pilih dari galeri. Dikecilkan otomatis.</p></div></div>' +
+        '<div class="field barcode-field"><span>Barcode (opsional)</span><div class="barcode-row"><input name="barcode" class="input" inputmode="text" autocomplete="off" maxlength="40" value="' + esc(p.barcode || sh.barcode || '') + '" placeholder="Scan atau ketik nomor barcode">' +
+        '<button type="button" class="btn btn-outline" data-action="scan-barcode">' + I('camera', 18) + ' Scan</button></div><p class="small muted" id="barcode-msg" role="status"></p></div>' +
         '<label class="field"><span>Nama produk</span><input name="name" class="input" value="' + esc(p.name) + '" maxlength="40" required></label>' +
         '<label class="field"><span>Kategori</span><select name="category" class="input" required>' + db.categories.map(function (c) { return '<option ' + (c === p.category ? 'selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '<option value="__new">+ Kategori baru…</option></select></label>' +
         '<label class="field" id="newcat-field" hidden><span>Nama kategori baru</span><input name="newcat" class="input" maxlength="30" placeholder="Mis. Gorengan"></label>' +
@@ -957,6 +959,88 @@
     if (list) list.innerHTML = productList();
     var tt = document.querySelector('.today-total'); if (tt) tt.textContent = rp(report(U.todayKey()).total_sales);
   }
+  /* ---------- Barcode pada form produk ---------- */
+  function setBarcodeMsg(html, tone) {
+    var el = document.getElementById('barcode-msg');
+    if (el) { el.innerHTML = html; el.className = 'small ' + (tone === 'error' ? 'bad' : tone === 'ok' ? 'ok-text' : 'muted'); }
+  }
+  function applyBarcode(raw) {
+    var f = document.querySelector('form[data-form=product]');
+    if (!f || !f.barcode) return;
+    var code = window.Barcode ? Barcode.clean(raw) : String(raw || '').trim();
+    f.barcode.value = code;
+    applyBarcode.lastCode = code;
+    if (!code) { setBarcodeMsg('', ''); return; }
+    var selfId = S.sheet && S.sheet.id;
+    var dup = db.products.find(function (p) { return !p.archived && p.barcode === code && p.id !== selfId; });
+    if (dup) {
+      setBarcodeMsg('Barcode ini sudah dipakai oleh <b>' + esc(dup.name) + '</b>. <button type="button" class="link-btn" data-action="edit-product" data-id="' + dup.id + '">Buka produk itu</button>', 'error');
+      return;
+    }
+    if (!window.Barcode) return;
+    setBarcodeMsg('Barcode ' + esc(code) + ' tercatat. Mencari data produk…', 'muted');
+    var tok = applyBarcode.tok = (applyBarcode.tok || 0) + 1;
+    Barcode.lookup(code).then(function (info) {
+      if (tok !== applyBarcode.tok || !document.body.contains(f)) return;
+      if (!info) { setBarcodeMsg('Barcode tercatat. Produk tidak ditemukan di basis data online (hanya barang kemasan yang ada), isi nama secara manual.', 'muted'); return; }
+      var filled = [];
+      if (!f.name.value.trim()) { f.name.value = info.name.slice(0, 40); filled.push('nama'); }
+      if (!f.description.value.trim() && info.quantity) { f.description.value = info.quantity.slice(0, 80); filled.push('deskripsi'); }
+      setBarcodeMsg('Ditemukan: <b>' + esc(info.name) + '</b> ' + (filled.length ? '(terisi: ' + filled.join(', ') + ')' : '(kolom yang sudah Anda isi tidak diubah)') + '. Periksa dulu, lalu isi harga. <span class="tiny">Data: Open Food Facts</span>', 'ok');
+    }).catch(function () {
+      if (tok === applyBarcode.tok && document.body.contains(f)) setBarcodeMsg('Barcode tercatat. Tidak ada koneksi untuk mencari data produk, isi nama secara manual.', 'muted');
+    });
+  }
+  /* ---------- Scan barcode di layar Kasir ---------- */
+  function scanToCart(raw) {
+    var code = window.Barcode ? Barcode.clean(raw) : String(raw || '').trim();
+    var p = db.products.find(function (x) { return !x.archived && x.barcode === code; });
+    if (!p) {
+      var res = { tone: 'error', text: 'Barcode ' + code + ' belum terdaftar' };
+      if (isOwner()) res.action = { label: 'Tambah produk ini', run: function () {
+        S.drawer = false; S.sheet = { type: 'product', id: null, category: '', init: null, barcode: code }; renderOverlay();
+        setTimeout(function () { applyBarcode(code); }, 60);
+      } };
+      return res;
+    }
+    var line = S.cart.find(function (x) { return x.id === p.id; }), before = line ? line.qty : 0;
+    if (p.track_stock && before + 1 > p.stock) return { tone: 'error', text: p.name + ': stok tinggal ' + p.stock };
+    addToCart(p.id); render();
+    return { tone: 'ok', text: '+1 ' + p.name + ' (jumlah ' + (before + 1) + ')' };
+  }
+  /* Scanner USB/Bluetooth di kolom cari: ketik barcode + Enter memasukkan barang ke keranjang. */
+  document.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (e.key !== 'Enter' || !t || t.id !== 'search' || !window.Barcode) return;
+    var code = Barcode.clean(t.value);
+    if (code.length < 6 || !/\d/.test(code)) return;
+    var known = db.products.some(function (x) { return !x.archived && x.barcode === code; });
+    if (!known && !/^\d{8,14}$/.test(code)) return;   /* bukan barcode: tetap pencarian biasa */
+    e.preventDefault(); S.q = '';
+    var r = scanToCart(code); toast(r.text, r.tone === 'ok' ? 'ok' : 'error', 1800);
+    if (r.tone !== 'ok') refreshKasirParts();
+    var el = document.getElementById('search'); if (el) { el.value = ''; el.focus(); }
+  });
+  /* Scanner tanpa menyentuh kolom cari: karakter sangat cepat + Enter di layar Kasir dianggap barcode. */
+  var wedge = { buf: '', t: 0 };
+  document.addEventListener('keydown', function (e) {
+    if (!S.user || S.sheet || route() !== 'kasir' || !window.Barcode) return;
+    var a = document.activeElement;
+    if ((a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || e.ctrlKey || e.altKey || e.metaKey) return;
+    var now = Date.now();
+    if (e.key === 'Enter') {
+      var code = wedge.buf; wedge.buf = '';
+      if (code.length >= 6 && /\d/.test(code)) { e.preventDefault(); var r = scanToCart(code); toast(r.text, r.tone === 'ok' ? 'ok' : 'error', 1800); }
+      return;
+    }
+    if (e.key && e.key.length === 1) { if (now - wedge.t > 100) wedge.buf = ''; wedge.buf += e.key; wedge.t = now; }
+  });
+  /* Scanner barcode USB/Bluetooth mengetik angka lalu Enter: jangan sampai Enter menyimpan form. */
+  document.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (e.key === 'Enter' && t && t.name === 'barcode' && t.closest && t.closest('form[data-form=product]')) { e.preventDefault(); applyBarcode(t.value); }
+  });
+  function Barcode_changed(v) { return (window.Barcode ? Barcode.clean(v) : String(v || '').trim()) !== (applyBarcode.lastCode || ''); }
   function updatePhotoPreview() {
     var sh = S.sheet, p = sh && sh.id ? product(sh.id) : null;
     var photo = sh.photo !== undefined ? sh.photo : (p && p.photo);
@@ -1169,7 +1253,16 @@
       var t = db.transactions.find(function (x) { return x.id === d.id; }); if (!t) return;
       confirmSheet({ title: 'Batalkan ' + (t.no || kindInfo(t).label) + '?', message: 'Catatan tidak dihapus, tetapi ditandai dibatalkan dan tidak dihitung di laporan.' + (t.kind === 'sale' ? ' Stok akan dikembalikan.' : ''), reason: true, confirmLabel: 'Batalkan', act: 'void', id: t.id });
     },
+    'scan-cart': function () {
+      if (!window.Barcode) { toast('Fitur barcode belum terpasang. Pastikan berkas barcode.js ikut diunggah.', 'error'); return; }
+      Barcode.scan(scanToCart, function (m) { toast(m, 'error', 3500); }, { continuous: true });
+    },
+    'scan-barcode': function () {
+      if (!window.Barcode) { toast('Fitur barcode belum terpasang. Pastikan berkas barcode.js ikut diunggah.', 'error'); return; }
+      Barcode.scan(function (code) { applyBarcode(code); }, function (m) { setBarcodeMsg(esc(m), 'error'); });
+    },
     'edit-product': function (d) {
+      applyBarcode.lastCode = '';
       var p0 = d.id ? product(d.id) : null;
       S.sheet = { type: 'product', id: d.id || null, category: d.cat || '', init: p0 ? JSON.parse(JSON.stringify(p0)) : null };   /* nilai awal: hanya kolom yang diubah yang disimpan */
       renderOverlay();
@@ -1260,6 +1353,11 @@
       var sh = S.sheet, price = U.parseRp(f.price.value), cost = U.parseRp(f.cost.value), stock = parseInt(String(f.stock.value).replace(/[^\d-]/g, ''), 10) || 0;
       if (!f.name.value.trim() || price <= 0) { toast('Nama dan harga jual wajib diisi', 'error'); return; }
       if (cost > price) toast('Perhatian: modal lebih besar dari harga jual', 'error');
+      var barcode = window.Barcode ? Barcode.clean(f.barcode.value) : String(f.barcode.value || '').trim();
+      if (barcode) {
+        var dupB = db.products.find(function (x) { return !x.archived && x.barcode === barcode && x.id !== sh.id; });
+        if (dupB) { toast('Barcode sudah dipakai oleh ' + dupB.name, 'error'); return; }
+      }
       var cat = f.category.value;
       if (cat === '__new') {
         var nn = f.newcat.value.trim();
@@ -1267,11 +1365,11 @@
         var ex = db.categories.find(function (c) { return c.toLowerCase() === nn.toLowerCase(); });
         if (ex) cat = ex; else { db.categories.push(nn); logEvent('Kategori baru: ' + nn); cat = nn; }
       }
-      var data = { name: f.name.value.trim(), category: cat, price: price, cost: cost, stock: stock, track_stock: f.track_stock.checked, description: f.description.value.trim(), icon: f.icon.value };
+      var data = { name: f.name.value.trim(), category: cat, price: price, cost: cost, stock: stock, track_stock: f.track_stock.checked, description: f.description.value.trim(), icon: f.icon.value, barcode: barcode };
       if (sh.photo !== undefined) data.photo = sh.photo;
       var id = sh.id;
       if (id && sh.init) {   /* edit bersamaan: jangan menimpa kolom yang tidak Anda ubah (mis. stok yang sudah berubah karena penjualan) */
-        Object.keys(data).forEach(function (k) { if (JSON.stringify(data[k]) === JSON.stringify(sh.init[k] === undefined ? (k === 'photo' ? '' : sh.init[k]) : sh.init[k])) delete data[k]; });
+        Object.keys(data).forEach(function (k) { if (JSON.stringify(data[k]) === JSON.stringify(sh.init[k] === undefined ? ((k === 'photo' || k === 'barcode') ? '' : sh.init[k]) : sh.init[k])) delete data[k]; });
       }
       if (id) {
         var p = product(id), changes = [];
@@ -1280,6 +1378,7 @@
         if (data.cost !== undefined && p.cost !== data.cost) changes.push('modal ' + rp(p.cost) + ' → ' + rp(data.cost));
         if (data.stock !== undefined && p.stock !== data.stock) changes.push('stok ' + p.stock + ' → ' + data.stock);
         if (data.photo !== undefined && data.photo !== (p.photo || '')) changes.push(data.photo ? 'foto diganti' : 'foto dihapus');
+        if (data.barcode !== undefined && data.barcode !== (p.barcode || '')) changes.push('barcode ' + (data.barcode || 'dihapus'));
         Object.assign(p, data);
         if (changes.length) logEvent('Ubah produk ' + p.name + ': ' + changes.join(', '));
       } else {
@@ -1406,6 +1505,7 @@
         .then(function (u) { db.settings.qris = u; logEvent('Gambar QRIS diperbarui'); save(); render(); toast('Gambar QRIS disimpan', 'ok'); })
         .catch(function () { toast('Gambar tidak bisa dibaca. Coba gambar lain.', 'error'); });
     }
+    if (t.name === 'barcode' && t.closest('form[data-form=product]') && Barcode_changed(t.value)) applyBarcode(t.value);
     if (t.name === 'category' && t.closest('form[data-form=product]')) { var nf = document.getElementById('newcat-field'); if (nf) { nf.hidden = t.value !== '__new'; if (!nf.hidden) nf.querySelector('input').focus(); } }
     if (t.id === 'report-date' && t.value) { S.reportDate = t.value > U.todayKey() ? U.todayKey() : t.value; render(); }
     if (t.id === 'import-file' && t.files[0]) {
