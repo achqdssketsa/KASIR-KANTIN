@@ -487,3 +487,29 @@ body[data-route="pesanan"] .main { padding-bottom: calc(var(--tabbar-h) + var(--
 .nw { white-space: nowrap; }
 .period-card .chips { flex-wrap: wrap; overflow: visible; }
 .day-head > span:last-child { white-space: nowrap; }
+
+/* ---------- v1.5: barcode pada form produk ---------- */
+.barcode-row { display: flex; gap: 8px; align-items: stretch; }
+.barcode-row .input { flex: 1; min-width: 0; }
+.barcode-row .btn { flex: none; }
+.barcode-field p { margin: 6px 0 0; min-height: 0; }
+.ok-text { color: var(--ok); }
+#scan-layer { position: fixed; inset: 0; z-index: 1000; background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
+.scan-box { position: relative; width: 100%; max-width: 520px; flex: 1; max-height: 70vh; border-radius: 16px; overflow: hidden; background: #111; }
+.scan-box video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.scan-frame { position: absolute; left: 10%; right: 10%; top: 32%; bottom: 32%; border: 3px solid #fff; border-radius: 14px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .45); }
+.scan-frame span { position: absolute; left: 6px; right: 6px; top: 50%; height: 2px; background: #FF5A4F; animation: scan-line 1.6s ease-in-out infinite alternate; }
+@keyframes scan-line { from { top: 12%; } to { top: 88%; } }
+@media (prefers-reduced-motion: reduce) { .scan-frame span { animation: none; } }
+.scan-msg { color: #fff; text-align: center; margin: 0; font-size: 15px; }
+.scan-close { background: #fff; color: #1F2A24; min-width: 160px; }
+.search-scan { flex: none; width: 38px; height: 38px; margin-right: -8px; border: 0; border-radius: 50%; background: transparent; color: var(--brand); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.search-scan:hover { background: var(--tertiary); }
+.scan-msg { min-height: 22px; }
+.scan-msg.ok { color: #7DDBA3; font-weight: 600; }
+.scan-msg.error { color: #FF9B94; font-weight: 600; }
+.scan-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.scan-act { background: #E4EBE5; color: #1F2A24; }
+
+/* Atribut hidden harus menang atas gaya tombol/kolom (mis. "Hapus foto" dan "Tambah produk ini" yang sengaja disembunyikan). */
+[hidden] { display: none !important; }
