@@ -13,7 +13,7 @@
   var S = {
     user: null, cat: 'Semua', q: '', cart: [], pm: 'tunai', paid: 0, note: '',
     drawer: false, sheet: null, auditFilter: 'all', auditQ: '', auditOpen: null,
-    reportDate: U.todayKey(), modalKind: 'modal_in', loginRole: 'owner'
+    reportDate: U.todayKey(), modalKind: 'modal_in', loginRole: 'owner', prodIncomplete: false
   };
 
   S.booting = !!Cloud.enabled; S.setup = false; S.fatal = null; S.auditFrom = U.todayKey(); S.auditTo = U.todayKey();
@@ -706,10 +706,61 @@
         : '<div class="empty big">' + I('clipboard', 38) + '<p>Tidak ada data pada pilihan ini</p></div>') + '</div>';
   }
 
+
+  /* ---------- Ringkasan persediaan & kelengkapan data produk ---------- */
+  function missingInfo(p) {
+    var core = [], extra = [];
+    if (!(p.price > 0)) core.push('harga jual');
+    if (!(p.cost > 0)) core.push('modal (HPP)');
+    if (p.track_stock === false) core.push('stok tidak dilacak');
+    else if (!(p.stock > 0)) core.push('stok kosong');
+    if (!p.photo) extra.push('foto');
+    if (!p.barcode) extra.push('barcode');
+    if (!(p.description || '').trim()) extra.push('deskripsi');
+    return { core: core, extra: extra };
+  }
+  function stockSummary(list) {
+    var r = { cost: 0, sell: 0, units: 0, counted: 0, noCost: 0, notTracked: 0, empty: 0, incomplete: 0, coreCount: 0, extraCount: 0 };
+    list.forEach(function (p) {
+      var m = missingInfo(p);
+      if (m.core.length) r.coreCount++;
+      if (m.extra.length) r.extraCount++;
+      if (m.core.length || m.extra.length) r.incomplete++;
+      if (p.track_stock === false) { r.notTracked++; return; }
+      var st = Math.max(0, p.stock || 0);
+      if (!st) { r.empty++; return; }
+      r.units += st; r.counted++;
+      r.sell += (p.price > 0 ? p.price : 0) * st;
+      if (p.cost > 0) r.cost += p.cost * st; else r.noCost++;
+    });
+    return r;
+  }
+  function stockPanel(list) {
+    var r = stockSummary(list);
+    var note = [];
+    if (r.noCost) note.push(r.noCost + ' produk bersetok belum ada modal, tidak ikut dihitung di nilai persediaan');
+    if (r.notTracked) note.push(r.notTracked + ' produk stoknya tidak dilacak, tidak ikut dihitung');
+    if (r.empty) note.push(r.empty + ' produk stoknya kosong');
+    var html = '<div class="kpi-grid stock-kpi">' +
+      kpi('Nilai persediaan (modal)', rp(r.cost), r.units + ' pcs dari ' + r.counted + ' produk', 'base') +
+      kpi('Perkiraan nilai jual stok', rp(r.sell), 'jika semua stok terjual', 'ok') + '</div>' +
+      '<div class="stock-gain"><span class="small muted">Perkiraan laba dari stok</span><b class="' + (r.sell - r.cost >= 0 ? 'ok' : 'bad') + '">' + rp(r.sell - r.cost) + '</b></div>' +
+      (note.length ? '<p class="tiny muted stock-note">' + note.join(' · ') + '. Nilai dihitung dari stok × modal dan stok × harga jual saat ini.</p>' : '<p class="tiny muted stock-note">Dihitung dari stok × modal dan stok × harga jual saat ini.</p>');
+    if (r.incomplete) {
+      html += '<button type="button" class="incomplete-card ' + (S.prodIncomplete ? 'active' : '') + '" data-action="toggle-incomplete">' + I('info', 18) +
+        '<span class="ic-text"><b>' + r.incomplete + ' produk belum lengkap keterangannya</b>' +
+        '<span class="small">' + (r.coreCount ? r.coreCount + ' kurang harga, modal, atau stok' : '') + (r.coreCount && r.extraCount ? ' · ' : '') + (r.extraCount ? r.extraCount + ' kurang foto, barcode, atau deskripsi' : '') + '</span></span>' +
+        '<span class="ic-act">' + (S.prodIncomplete ? 'Tampilkan semua' : 'Lihat') + '</span></button>';
+    } else if (list.length) {
+      html += '<div class="notice ok-notice">' + I('check', 18) + '<span>Semua produk sudah lengkap keterangannya.</span></div>';
+    }
+    return html;
+  }
+
   function productRow(p) {
     return '<div class="txn"><div class="txn-main"><span class="product-thumb sm ' + (p.photo ? 'has-photo' : '') + '">' + (p.photo ? '<img src="' + p.photo + '" alt="" loading="lazy">' : I(p.icon || 'bowl', 22)) + '</span>' +
       '<div class="txn-info"><h4>' + esc(p.name) + '</h4><p class="small muted">jual ' + rp(p.price) + ' · modal ' + rp(p.cost) + ' · ' + (p.track_stock ? 'stok ' + p.stock : 'stok tidak dilacak') + (p.barcode ? ' · barcode ' + esc(p.barcode) : '') + '</p>' +
-      (p.cost ? '' : '<p class="small bad">Modal belum diisi, laba bisa terlihat terlalu besar</p>') + '</div>' +
+      (function () { var m = missingInfo(p); return (m.core.length ? '<p class="small bad">Belum lengkap: ' + m.core.join(', ') + '</p>' : '') + (m.extra.length ? '<p class="tiny muted">Belum ada: ' + m.extra.join(', ') + '</p>' : ''); })() + '</div>' +
       '<div class="row-actions"><button class="step" data-action="edit-product" data-id="' + p.id + '" aria-label="Ubah ' + esc(p.name) + '">' + I('edit', 16) + '</button>' +
       '<button class="step danger" data-action="del-product" data-id="' + p.id + '" aria-label="Hapus ' + esc(p.name) + '">' + I('trash', 16) + '</button></div></div></div>';
   }
@@ -721,13 +772,15 @@
       (items.length ? '<div class="txn-list">' + items.map(productRow).join('') + '</div>' : '<p class="muted small cat-empty">Belum ada produk di kategori ini.</p>') + '</section>';
   }
   function viewProduk() {
-    var list = db.products.filter(function (p) { return !p.archived; });
+    var all = db.products.filter(function (p) { return !p.archived; });
+    var list = S.prodIncomplete ? all.filter(function (p) { var m = missingInfo(p); return m.core.length || m.extra.length; }) : all;
     var orphan = list.filter(function (p) { return db.categories.indexOf(p.category) < 0; });
-    var blocks = db.categories.map(function (c) { return catBlock(c, list.filter(function (p) { return p.category === c; })); }).join('') + (orphan.length ? catBlock('Tanpa kategori', orphan, true) : '');
+    var blocks = db.categories.map(function (c) { var it = list.filter(function (p) { return p.category === c; }); return (S.prodIncomplete && !it.length) ? '' : catBlock(c, it); }).join('') + (orphan.length ? catBlock('Tanpa kategori', orphan, true) : '');
     return topbar('Kelola Produk') + '<div class="page">' +
       '<div class="add-row"><button class="btn btn-primary" data-action="edit-product" data-id="">' + I('plus', 18) + ' Tambah produk</button>' +
       '<button class="btn btn-outline" data-action="add-category">' + I('plus', 18) + ' Tambah kategori</button></div>' +
-      '<p class="muted small">' + list.length + ' produk dalam ' + db.categories.length + ' kategori. Foto produk tampil di layar kasir.</p>' +
+      stockPanel(all) +
+      '<p class="muted small">' + (S.prodIncomplete ? 'Menampilkan ' + list.length + ' dari ' + all.length + ' produk yang belum lengkap.' : all.length + ' produk dalam ' + db.categories.length + ' kategori. Foto produk tampil di layar kasir.') + '</p>' +
       (blocks || '<div class="empty">' + I('box', 32) + '<p>Belum ada kategori. Mulai dengan menambah kategori, mis. Nasi, Minuman, Camilan.</p></div>') + '</div>';
   }
 
@@ -1248,6 +1301,7 @@
     'export-report': exportReport,
     'export-audit': exportAudit,
     'audit-filter': function (d) { S.auditFilter = d.f; S.auditOpen = null; render(); },
+    'toggle-incomplete': function () { S.prodIncomplete = !S.prodIncomplete; render(); },
     'audit-open': function (d, el, e) { if (e.target.closest('button')) return; S.auditOpen = S.auditOpen === d.id ? null : d.id; render(); },
     void: function (d) {
       var t = db.transactions.find(function (x) { return x.id === d.id; }); if (!t) return;
