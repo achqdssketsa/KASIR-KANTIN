@@ -736,54 +736,64 @@
     return r;
   }
   function stockPanel(list) {
-    var r = stockSummary(list);
-    var note = [];
-    if (r.noCost) note.push(r.noCost + ' produk bersetok belum ada modal, tidak ikut dihitung di nilai persediaan');
-    if (r.notTracked) note.push(r.notTracked + ' produk stoknya tidak dilacak, tidak ikut dihitung');
-    if (r.empty) note.push(r.empty + ' produk stoknya kosong');
-    var html = '<div class="kpi-grid stock-kpi">' +
-      kpi('Nilai persediaan (modal)', rp(r.cost), r.units + ' pcs dari ' + r.counted + ' produk', 'base') +
-      kpi('Perkiraan nilai jual stok', rp(r.sell), 'jika semua stok terjual', 'ok') + '</div>' +
-      '<div class="stock-gain"><span class="small muted">Perkiraan laba dari stok</span><b class="' + (r.sell - r.cost >= 0 ? 'ok' : 'bad') + '">' + rp(r.sell - r.cost) + '</b></div>' +
-      (note.length ? '<p class="tiny muted stock-note">' + note.join(' · ') + '. Nilai dihitung dari stok × modal dan stok × harga jual saat ini.</p>' : '<p class="tiny muted stock-note">Dihitung dari stok × modal dan stok × harga jual saat ini.</p>');
+    var r = stockSummary(list), notes = [], gain = r.sell - r.cost;
+    if (r.noCost) notes.push(r.noCost + ' produk bersetok belum diisi modal, tidak ikut dihitung');
+    if (r.notTracked) notes.push(r.notTracked + ' produk stoknya tidak dilacak, tidak ikut dihitung');
+    if (r.empty) notes.push(r.empty + ' produk stoknya kosong');
+    var html = '<details class="sumcard"><summary><span class="sum-l"><span class="eyebrow">NILAI STOK (MODAL)</span><b class="display">' + rp(r.cost) + '</b></span><span class="sum-r">Rincian</span></summary>' +
+      '<div class="sumcard-rows"><div class="kv"><span>Jumlah stok</span><span>' + r.units + ' pcs · ' + r.counted + ' produk</span></div>' +
+      '<div class="kv"><span>Jika semua stok terjual</span><span>' + rp(r.sell) + '</span></div>' +
+      '<div class="kv"><span>Perkiraan laba dari stok</span><span class="' + (gain >= 0 ? 'ok-text' : 'bad') + '"><b>' + rp(gain) + '</b></span></div></div>' +
+      '<p class="tiny muted sumcard-note">' + (notes.length ? notes.join(' · ') + '. ' : '') + 'Dihitung dari stok × modal dan stok × harga jual saat ini.</p></details>';
     if (r.incomplete) {
+      var parts = [];
+      if (r.coreCount) parts.push(r.coreCount + ' perlu harga, modal, atau stok');
+      if (r.extraCount) parts.push(r.extraCount + ' kurang foto, barcode, atau deskripsi');
       html += '<button type="button" class="incomplete-card ' + (S.prodIncomplete ? 'active' : '') + '" data-action="toggle-incomplete">' + I('info', 18) +
-        '<span class="ic-text"><b>' + r.incomplete + ' produk belum lengkap keterangannya</b>' +
-        '<span class="small">' + (r.coreCount ? r.coreCount + ' kurang harga, modal, atau stok' : '') + (r.coreCount && r.extraCount ? ' · ' : '') + (r.extraCount ? r.extraCount + ' kurang foto, barcode, atau deskripsi' : '') + '</span></span>' +
-        '<span class="ic-act">' + (S.prodIncomplete ? 'Tampilkan semua' : 'Lihat') + '</span></button>';
+        '<span class="ic-text"><b>' + r.incomplete + ' produk belum lengkap</b><span class="small">' + parts.join('<br>') + '</span></span>' +
+        '<span class="ic-act">' + (S.prodIncomplete ? 'Semua' : 'Lihat') + '</span></button>';
     } else if (list.length) {
-      html += '<div class="notice ok-notice">' + I('check', 18) + '<span>Semua produk sudah lengkap keterangannya.</span></div>';
+      html += '<p class="ok-line">' + I('check', 16) + ' Semua produk sudah lengkap</p>';
     }
     return html;
   }
 
+  function stockChip(p) {
+    if (p.track_stock === false) return '<span class="chip-s">Stok tidak dilacak</span>';
+    var tone = p.stock <= 0 ? 'danger' : p.stock <= 5 ? 'warn' : 'ok';
+    return '<span class="chip-s ' + tone + '">' + (p.stock <= 0 ? 'Stok habis' : 'Stok ' + p.stock) + '</span>';
+  }
   function productRow(p) {
-    return '<div class="txn"><div class="txn-main"><span class="product-thumb sm ' + (p.photo ? 'has-photo' : '') + '">' + (p.photo ? '<img src="' + p.photo + '" alt="" loading="lazy">' : I(p.icon || 'bowl', 22)) + '</span>' +
-      '<div class="txn-info"><h4>' + esc(p.name) + '</h4><p class="small muted">jual ' + rp(p.price) + ' · modal ' + rp(p.cost) + ' · ' + (p.track_stock ? 'stok ' + p.stock : 'stok tidak dilacak') + (p.barcode ? ' · barcode ' + esc(p.barcode) : '') + '</p>' +
-      (function () { var m = missingInfo(p); return (m.core.length ? '<p class="small bad">Belum lengkap: ' + m.core.join(', ') + '</p>' : '') + (m.extra.length ? '<p class="tiny muted">Belum ada: ' + m.extra.join(', ') + '</p>' : ''); })() + '</div>' +
-      '<div class="row-actions"><button class="step" data-action="edit-product" data-id="' + p.id + '" aria-label="Ubah ' + esc(p.name) + '">' + I('edit', 16) + '</button>' +
-      '<button class="step danger" data-action="del-product" data-id="' + p.id + '" aria-label="Hapus ' + esc(p.name) + '">' + I('trash', 16) + '</button></div></div></div>';
+    var m = missingInfo(p), chips = stockChip(p), info = [];
+    chips += p.cost > 0 ? '<span class="chip-s">Modal ' + rp(p.cost) + '</span>' : '<span class="chip-s danger">Modal belum diisi</span>';
+    if (!(p.price > 0)) chips += '<span class="chip-s danger">Harga belum diisi</span>';
+    if (p.barcode) info.push('Barcode ' + esc(p.barcode));
+    if (m.extra.length) info.push('Belum ada: ' + m.extra.join(', '));
+    return '<div class="prow" role="button" tabindex="0" data-action="edit-product" data-id="' + p.id + '" aria-label="Ubah ' + esc(p.name) + '">' +
+      '<span class="product-thumb ' + (p.photo ? 'has-photo' : '') + '">' + (p.photo ? '<img src="' + p.photo + '" alt="" loading="lazy">' : I(p.icon || 'bowl', 22)) + '</span>' +
+      '<div class="prow-main"><h4>' + esc(p.name) + '</h4><p class="prow-price">' + (p.price > 0 ? rp(p.price) : '—') + '</p></div>' +
+      '<button type="button" class="prow-del" data-action="del-product" data-id="' + p.id + '" aria-label="Hapus ' + esc(p.name) + '">' + I('trash', 18) + '</button>' +
+      '<div class="prow-foot"><div class="prow-chips">' + chips + '</div>' + (info.length ? '<p class="tiny muted prow-extra">' + info.join('<br>') + '</p>' : '') + '</div></div>';
   }
   function catBlock(name, items, orphan) {
-    return '<section class="cat-block"><div class="cat-head"><h3 class="display">' + esc(name) + ' <span class="muted small">(' + items.length + ')</span></h3><div class="row-actions">' +
-      (orphan ? '' : '<button class="btn btn-outline btn-sm" data-action="edit-product" data-id="" data-cat="' + esc(name) + '">' + I('plus', 15) + ' Produk</button>' +
-        '<button class="step" data-action="edit-cat" data-cat="' + esc(name) + '" aria-label="Ubah nama kategori ' + esc(name) + '">' + I('edit', 15) + '</button>' +
-        (items.length ? '' : '<button class="step danger" data-action="del-cat" data-cat="' + esc(name) + '" aria-label="Hapus kategori ' + esc(name) + '">' + I('trash', 15) + '</button>')) + '</div></div>' +
-      (items.length ? '<div class="txn-list">' + items.map(productRow).join('') + '</div>' : '<p class="muted small cat-empty">Belum ada produk di kategori ini.</p>') + '</section>';
+    return '<section class="cat-block"><div class="cat-head"><h3>' + esc(name) + '<span class="cat-count">' + items.length + '</span></h3><div class="cat-actions">' +
+      (orphan ? '' : '<button type="button" class="cat-add" data-action="edit-product" data-id="" data-cat="' + esc(name) + '">' + I('plus', 16) + ' Produk</button>' +
+        '<button type="button" class="step sm" data-action="edit-cat" data-cat="' + esc(name) + '" aria-label="Ubah nama kategori ' + esc(name) + '">' + I('edit', 16) + '</button>' +
+        (items.length ? '' : '<button type="button" class="step sm danger" data-action="del-cat" data-cat="' + esc(name) + '" aria-label="Hapus kategori ' + esc(name) + '">' + I('trash', 16) + '</button>')) + '</div></div>' +
+      (items.length ? '<div class="plist">' + items.map(productRow).join('') + '</div>' : '<p class="muted small cat-empty">Belum ada produk di kategori ini.</p>') + '</section>';
   }
   function viewProduk() {
     var all = db.products.filter(function (p) { return !p.archived; });
     var list = S.prodIncomplete ? all.filter(function (p) { var m = missingInfo(p); return m.core.length || m.extra.length; }) : all;
     var orphan = list.filter(function (p) { return db.categories.indexOf(p.category) < 0; });
     var blocks = db.categories.map(function (c) { var it = list.filter(function (p) { return p.category === c; }); return (S.prodIncomplete && !it.length) ? '' : catBlock(c, it); }).join('') + (orphan.length ? catBlock('Tanpa kategori', orphan, true) : '');
-    return topbar('Kelola Produk') + '<div class="page">' +
-      '<div class="add-row"><button class="btn btn-primary" data-action="edit-product" data-id="">' + I('plus', 18) + ' Tambah produk</button>' +
-      '<button class="btn btn-outline" data-action="add-category">' + I('plus', 18) + ' Tambah kategori</button></div>' +
+    return topbar('Kelola Produk') + '<div class="page prod-page">' +
+      '<div class="add-row"><button class="btn btn-primary" data-action="edit-product" data-id="">' + I('plus', 18) + ' Produk baru</button>' +
+      '<button class="btn btn-outline" data-action="add-category">' + I('plus', 18) + ' Kategori baru</button></div>' +
       stockPanel(all) +
-      '<p class="muted small">' + (S.prodIncomplete ? 'Menampilkan ' + list.length + ' dari ' + all.length + ' produk yang belum lengkap.' : all.length + ' produk dalam ' + db.categories.length + ' kategori. Foto produk tampil di layar kasir.') + '</p>' +
+      '<p class="prod-count">' + (S.prodIncomplete ? 'Menampilkan ' + list.length + ' dari ' + all.length + ' produk yang belum lengkap' : all.length + ' produk · ' + db.categories.length + ' kategori') + '</p>' +
       (blocks || '<div class="empty">' + I('box', 32) + '<p>Belum ada kategori. Mulai dengan menambah kategori, mis. Nasi, Minuman, Camilan.</p></div>') + '</div>';
   }
-
 
   /* ---------- Ringkasan fungsi modal: saldo kas, modal kerja, operasional ---------- */
   function fundSummary() {
@@ -808,51 +818,54 @@
     r.working = r.cash + r.stock;
     return r;
   }
-  function fundCard(tone, label, big, sub, rows, note) {
-    return '<section class="fund-card t-' + tone + '"><p class="eyebrow">' + label + '</p><p class="display fund-val ' + (big < 0 ? 'bad' : '') + '">' + rp(big) + '</p><p class="small muted">' + sub + '</p>' +
-      '<div class="fund-rows">' + rows.map(function (x) { return '<div class="kv"><span>' + x[0] + '</span><span class="' + (x[2] || '') + '">' + x[1] + '</span></div>'; }).join('') + '</div>' +
-      (note ? '<p class="tiny muted fund-note">' + note + '</p>' : '') + '</section>';
+  function fundRows(a) {
+    return a.map(function (x) { return '<div class="kv"><span>' + x[0] + '</span><span class="' + (x[2] || '') + '">' + x[1] + '</span></div>'; }).join('');
   }
   function fundPanel() {
     var f = fundSummary(), pct = f.salesMonth ? fmtPct(f.opexMonth / f.salesMonth * 100) : '-';
-    return '<p class="label">RINGKASAN MODAL</p><div class="fund-grid">' +
-      fundCard('base', 'SALDO KAS', f.cash, 'uang yang tersedia saat ini', [
-        ['Tunai di laci (perkiraan)', rp(f.laci), f.laci < 0 ? 'bad' : ''],
-        ['Rekening / e-wallet (tercatat)', rp(f.bank), f.bank < 0 ? 'bad' : '']
-      ], 'Laci dihitung dari tutup kas terakhir lalu dicocokkan dengan penjualan tunai dan catatan di bawah. Rekening dihitung dari QRIS, transfer, dan catatan bersumber rekening, bukan saldo bank sebenarnya.') +
-      fundCard('ok', 'MODAL KERJA', f.working, 'kas ditambah barang dagangan', [
-        ['Saldo kas', rp(f.cash)],
-        ['Persediaan barang (modal)', rp(f.stock)],
-        ['Modal disetor pemilik', rp(f.modalIn)],
-        ['Prive (diambil pemilik)', rp(f.draw)]
-      ], 'Modal kerja = uang siap pakai + stok barang bermodal. Utang dan piutang tidak dicatat di aplikasi ini.') +
-      fundCard('warn', 'OPERASIONAL', f.opexMonth, 'biaya operasional bulan ini', [
-        ['Hari ini', rp(f.opexToday)],
-        ['Rata-rata per hari (bulan ini)', rp(Math.round(f.opexMonth / f.dayNo))],
-        ['Porsi dari penjualan bulan ini', pct],
-        ['Total semua catatan', rp(f.opexAll)]
-      ], 'Hanya catatan Biaya (gas, listrik, gaji, dll). Belanja stok tidak termasuk karena masuk lewat HPP.') + '</div>';
+    return '<section class="fund-main"><p class="eyebrow">SALDO KAS</p><p class="display fund-val ' + (f.cash < 0 ? 'bad' : '') + '">' + rp(f.cash) + '</p><p class="small muted">uang yang tersedia saat ini</p>' +
+      '<div class="fund-rows">' + fundRows([['Tunai di laci (perkiraan)', rp(f.laci), f.laci < 0 ? 'bad' : ''], ['Rekening / e-wallet (tercatat)', rp(f.bank), f.bank < 0 ? 'bad' : '']]) + '</div>' +
+      '<details class="explain"><summary>Cara menghitung</summary><p class="tiny muted">Laci dihitung dari tutup kas terakhir lalu dicocokkan dengan penjualan tunai dan catatan di bawah. Rekening dihitung dari QRIS, transfer, dan catatan bersumber rekening, bukan saldo bank sebenarnya.</p></details></section>' +
+      '<details class="fund-more"><summary><span>Modal kerja</span><b>' + rp(f.working) + '</b></summary>' +
+      '<div class="fund-rows">' + fundRows([['Saldo kas', rp(f.cash)], ['Persediaan barang (modal)', rp(f.stock)], ['Modal disetor pemilik', rp(f.modalIn)], ['Prive (diambil pemilik)', rp(f.draw)]]) + '</div>' +
+      '<p class="tiny muted">Modal kerja = uang siap pakai + stok barang bermodal. Utang dan piutang tidak dicatat di aplikasi ini.</p></details>' +
+      '<details class="fund-more"><summary><span>Biaya operasional bulan ini</span><b>' + rp(f.opexMonth) + '</b></summary>' +
+      '<div class="fund-rows">' + fundRows([['Hari ini', rp(f.opexToday)], ['Rata-rata per hari', rp(Math.round(f.opexMonth / f.dayNo))], ['Porsi dari penjualan bulan ini', pct], ['Total semua catatan', rp(f.opexAll)]]) + '</div>' +
+      '<p class="tiny muted">Hanya catatan Biaya (gas, listrik, gaji, dll). Belanja stok tidak termasuk karena masuk lewat HPP.</p></details>';
+  }
+  function moneyRow(t) {
+    var inf = kindInfo(t), minus = t.kind !== 'modal_in';
+    return '<div class="mrow ' + (t.voided ? 'void' : '') + '"><span class="mrow-ic tone-bg-' + inf.tone + '">' + I(inf.icon, 18) + '</span>' +
+      '<div class="mrow-main"><b>' + esc(t.note || inf.label) + '</b><span class="tiny muted">' + inf.label + ' · ' + U.time(t.created_at) + ' · ' + (t.source === 'rekening' ? 'Rekening' : 'Laci') + (t.voided ? ' · dibatalkan' : '') + '</span></div>' +
+      '<span class="mrow-amt ' + (minus ? 'neg' : 'pos') + '">' + (minus ? '−' : '+') + rp(t.amount || 0) + '</span></div>';
   }
 
   function viewModal() {
-    var today = U.todayKey(), kinds = [['modal_in', 'down', 'Modal Masuk'], ['purchase', 'box', 'Belanja Stok'], ['expense', 'up', 'Biaya'], ['owner_draw', 'up', 'Prive']];
+    var today = U.todayKey();
+    var kinds = [['modal_in', 'down', 'Modal Masuk', 'Setoran pemilik'], ['purchase', 'box', 'Belanja Stok', 'Beli barang jualan'], ['expense', 'up', 'Biaya', 'Gas, listrik, gaji'], ['owner_draw', 'up', 'Prive', 'Diambil pemilik']];
     var hints = {
-      modal_in: 'Uang yang dimasukkan pemilik ke usaha (mis. modal awal laci). Bukan pendapatan dan bukan laba.',
-      purchase: 'Beli barang untuk dijual (bahan, minuman, snack). Mengurangi uang, tetapi bukan biaya: modalnya masuk laporan lewat HPP saat barang terjual. Jangan lupa tambah stok di menu Produk.',
-      expense: 'Biaya menjalankan usaha: gas, listrik, gaji, plastik, kebersihan. Mengurangi laba bersih.',
-      owner_draw: 'Uang yang diambil pemilik untuk keperluan pribadi. Mengurangi uang di laci, tetapi bukan biaya usaha.'
+      modal_in: ['Uang pemilik yang dimasukkan ke usaha. Bukan pendapatan dan bukan laba.', 'Contoh: modal awal laci hari ini.'],
+      purchase: ['Beli barang untuk dijual. Bukan biaya: modalnya masuk laporan lewat HPP saat barang terjual.', 'Bahan, minuman, snack. Mengurangi uang. Jangan lupa tambah stok di menu Produk.'],
+      expense: ['Biaya menjalankan usaha. Mengurangi laba bersih.', 'Gas, listrik, gaji, plastik, kebersihan.'],
+      owner_draw: ['Uang pribadi yang diambil pemilik. Bukan biaya usaha.', 'Mengurangi uang di laci, tetapi tidak mengurangi laba.']
     };
+    var ph = { modal_in: 'Mis. modal awal laci hari ini', purchase: 'Mis. beli beras, telur, minyak di pasar', expense: 'Mis. isi gas dan bayar listrik', owner_draw: 'Mis. diambil pemilik untuk keperluan pribadi' };
     var list = db.transactions.filter(function (t) { return ['modal_in', 'purchase', 'expense', 'owner_draw'].indexOf(t.kind) >= 0 && U.dateKey(t.created_at) === today; }).slice().reverse();
-    return topbar('Modal & Pengeluaran') + '<div class="page narrow">' + fundPanel() +
-      '<p class="label">CATAT BARU</p><div class="seg seg4">' + kinds.map(function (k) {
-        return '<button type="button" class="seg-btn ' + (S.modalKind === k[0] ? 'active' : '') + '" data-action="modal-kind" data-k="' + k[0] + '">' + I(k[1], 16) + ' ' + k[2] + '</button>';
+    return topbar('Modal & Pengeluaran') + '<div class="page narrow modal-page">' + fundPanel() +
+      '<h2 class="sec-title">Catat baru</h2><p class="sec-sub">1. Pilih jenis catatan</p>' +
+      '<div class="kind-grid">' + kinds.map(function (k) {
+        var on = S.modalKind === k[0];
+        return '<button type="button" class="kind-card ' + (on ? 'active' : '') + '" aria-pressed="' + on + '" data-action="modal-kind" data-k="' + k[0] + '"><span class="kind-top"><span class="kind-ic">' + I(k[1], 18) + '</span><b>' + k[2] + '</b></span><span class="kind-sub">' + k[3] + '</span></button>';
       }).join('') + '</div>' +
-      '<div class="notice">' + I('info', 18) + '<span>' + hints[S.modalKind] + '</span></div>' +
-      '<form data-form="modal" class="stack"><label class="field"><span>JUMLAH</span><input name="amount" class="input input-lg" inputmode="numeric" placeholder="Rp 0" required></label>' +
-      '<label class="field"><span>SUMBER UANG</span><select name="source" class="input"><option value="laci">Uang tunai di laci</option><option value="rekening">Rekening / e-wallet (tidak lewat laci)</option></select></label>' +
-      '<label class="field"><span>KETERANGAN</span><input name="note" class="input" maxlength="120" required placeholder="' + { modal_in: 'Mis. modal awal laci hari ini', purchase: 'Mis. beli beras, telur, minyak di pasar', expense: 'Mis. isi gas dan bayar listrik', owner_draw: 'Mis. diambil pemilik untuk keperluan pribadi' }[S.modalKind] + '"></label>' +
+      '<div class="kind-hint">' + I('info', 16) + '<div><p>' + hints[S.modalKind][0] + '</p><details><summary>Penjelasan</summary><p>' + hints[S.modalKind][1] + '</p></details></div></div>' +
+      '<form data-form="modal" class="stack mform"><p class="sec-sub">2. Isi jumlahnya</p>' +
+      '<label class="field"><span>Jumlah (Rp)</span><input name="amount" class="input input-lg" inputmode="numeric" placeholder="Rp 0" required></label>' +
+      '<div class="field"><span>Uang diambil dari</span><div class="src-seg"><label class="src-opt"><input type="radio" name="source" value="laci" checked><span>' + I('cash', 16) + ' Laci</span></label>' +
+      '<label class="src-opt"><input type="radio" name="source" value="rekening"><span>' + I('bank', 16) + ' Rekening</span></label></div></div>' +
+      '<label class="field"><span>Untuk apa?</span><input name="note" class="input" maxlength="120" required placeholder="' + ph[S.modalKind] + '"></label>' +
       '<button class="btn btn-primary btn-block btn-lg" type="submit">Simpan catatan</button></form>' +
-      '<p class="label">HARI INI</p>' + (list.length ? '<div class="txn-list">' + list.map(function (t) { return txnCard(t); }).join('') + '</div>' : '<p class="muted small">Belum ada catatan hari ini.</p>') + '</div>';
+      '<h2 class="sec-title">Hari ini <span class="muted small">' + list.length + ' catatan</span></h2>' +
+      (list.length ? '<div class="mlist">' + list.map(moneyRow).join('') + '</div>' : '<p class="muted small">Belum ada catatan hari ini.</p>') + '</div>';
   }
 
   function addUserForm() {
@@ -902,8 +915,8 @@
           : '<label class="btn btn-outline file-btn">' + I('upload', 18) + ' Pulihkan dari cadangan<input type="file" id="restore-file" accept="application/json,.json" hidden></label>') +
         (Cloud.enabled ? '' : '<button class="btn btn-danger-soft" data-action="reset-all">' + I('trash', 18) + ' Hapus semua data & mulai dari awal</button>') + '</div>';
     }
-    return h + (Cloud.enabled ? '<p class="tiny muted center">Kantin Insya v1.5 · mode cloud · ' + db.transactions.length + ' catatan (' + Cloud.historyDays + ' hari terakhir)</p></div>'
-      : '<p class="tiny muted center">Kantin Insya v1.5 · ' + db.transactions.length + ' catatan · penyimpanan ±' + Store.sizeKB() + ' KB dari ±5.000 KB</p></div>');
+    return h + (Cloud.enabled ? '<p class="tiny muted center">Kantin Insya v1.6 · mode cloud · ' + db.transactions.length + ' catatan (' + Cloud.historyDays + ' hari terakhir)</p></div>'
+      : '<p class="tiny muted center">Kantin Insya v1.6 · ' + db.transactions.length + ' catatan · penyimpanan ±' + Store.sizeKB() + ' KB dari ±5.000 KB</p></div>');
   }
 
   function tabbar(r) {
@@ -950,24 +963,26 @@
       var p = sh.id ? product(sh.id) : null;
       p = p || { name: '', category: sh.category || db.categories[0] || '', price: '', cost: '', stock: 0, track_stock: true, description: '', icon: 'bowl' };
       var photo = sh.photo !== undefined ? sh.photo : p.photo;
-      body = '<h3 class="display">' + (sh.id ? 'Ubah Produk' : 'Tambah Produk') + '</h3><form data-form="product" class="stack">' +
-        '<div class="photo-row"><div class="photo-box" id="photo-prev">' + photoInner(photo, p.icon) + '</div><div class="photo-actions">' +
+      body = '<h3 class="display">' + (sh.id ? 'Ubah Produk' : 'Tambah Produk') + '</h3><form data-form="product" class="stack pform">' +
+        '<div class="fgroup"><div class="photo-row"><div class="photo-box" id="photo-prev">' + photoInner(photo, p.icon) + '</div><div class="photo-actions">' +
         '<label class="btn btn-outline btn-sm file-btn">' + I('camera', 16) + ' <span id="photo-label">' + (photo ? 'Ganti foto' : 'Tambah foto') + '</span><input type="file" id="product-photo" accept="image/*" hidden></label>' +
         '<button type="button" class="btn btn-danger-soft btn-sm" id="photo-clear" data-action="clear-photo" ' + (photo ? '' : 'hidden') + '>Hapus foto</button>' +
-        '<p class="tiny muted">Ambil foto atau pilih dari galeri. Dikecilkan otomatis.</p></div></div>' +
-        '<div class="field barcode-field"><span>Barcode (opsional)</span><div class="barcode-row"><input name="barcode" class="input" inputmode="text" autocomplete="off" maxlength="40" value="' + esc(p.barcode || sh.barcode || '') + '" placeholder="Scan atau ketik nomor barcode">' +
-        '<button type="button" class="btn btn-outline" data-action="scan-barcode">' + I('camera', 18) + ' Scan</button></div><p class="small muted" id="barcode-msg" role="status"></p></div>' +
+        '<p class="tiny muted">Foto dikecilkan otomatis.</p></div></div>' +
+        '<div class="field barcode-field"><span>Barcode (opsional)</span><div class="barcode-row"><input name="barcode" class="input" inputmode="text" autocomplete="off" maxlength="40" value="' + esc(p.barcode || sh.barcode || '') + '" placeholder="Scan atau ketik nomor">' +
+        '<button type="button" class="btn btn-outline" data-action="scan-barcode">' + I('camera', 18) + ' Scan</button></div><p class="small muted" id="barcode-msg" role="status"></p></div></div>' +
+        '<div class="fgroup"><p class="fhead">Detail produk</p>' +
         '<label class="field"><span>Nama produk</span><input name="name" class="input" value="' + esc(p.name) + '" maxlength="40" required></label>' +
         '<label class="field"><span>Kategori</span><select name="category" class="input" required>' + db.categories.map(function (c) { return '<option ' + (c === p.category ? 'selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '<option value="__new">+ Kategori baru…</option></select></label>' +
         '<label class="field" id="newcat-field" hidden><span>Nama kategori baru</span><input name="newcat" class="input" maxlength="30" placeholder="Mis. Gorengan"></label>' +
-        '<div class="grid2"><label class="field"><span>Harga jual (Rp)</span><input name="price" class="input" inputmode="numeric" value="' + (p.price ? U.num(p.price) : '') + '" required></label>' +
-        '<label class="field"><span>Modal / HPP per porsi (Rp)</span><input name="cost" class="input" inputmode="numeric" value="' + (p.cost ? U.num(p.cost) : '') + '"></label></div>' +
-        '<div class="grid2"><label class="field"><span>Stok</span><input name="stock" class="input" inputmode="numeric" value="' + (p.stock || 0) + '"></label>' +
-        '<label class="field"><span>Ikon (jika tanpa foto)</span><select name="icon" class="input">' + [['bowl', 'Makanan'], ['cup', 'Minuman dingin'], ['coffee', 'Minuman panas']].map(function (o) { return '<option value="' + o[0] + '" ' + (o[0] === p.icon ? 'selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label></div>' +
-        '<label class="check"><input type="checkbox" name="track_stock" ' + (p.track_stock ? 'checked' : '') + '> Lacak stok (tidak bisa dijual saat stok habis)</label>' +
-        '<label class="field"><span>Deskripsi</span><input name="description" class="input" value="' + esc(p.description) + '" maxlength="80"></label>' +
+        '<label class="field"><span>Deskripsi (opsional)</span><input name="description" class="input" value="' + esc(p.description) + '" maxlength="80"></label></div>' +
+        '<div class="fgroup"><p class="fhead">Harga &amp; stok</p>' +
+        '<div class="grid2 aligned"><label class="field"><span>Harga jual (Rp)</span><input name="price" class="input" inputmode="numeric" value="' + (p.price ? U.num(p.price) : '') + '" required></label>' +
+        '<label class="field"><span>Modal per porsi (Rp)</span><input name="cost" class="input" inputmode="numeric" value="' + (p.cost ? U.num(p.cost) : '') + '"></label></div>' +
+        '<div class="grid2 aligned"><label class="field"><span>Stok</span><input name="stock" class="input" inputmode="numeric" value="' + (p.stock || 0) + '"></label>' +
+        '<label class="field"><span>Ikon (tanpa foto)</span><select name="icon" class="input">' + [['bowl', 'Makanan'], ['cup', 'Minuman dingin'], ['coffee', 'Minuman panas']].map(function (o) { return '<option value="' + o[0] + '" ' + (o[0] === p.icon ? 'selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label></div>' +
+        '<label class="check"><input type="checkbox" name="track_stock" ' + (p.track_stock ? 'checked' : '') + '> Lacak stok (tidak bisa dijual saat stok habis)</label></div>' +
         (sh.id ? '<p class="tiny muted">Perubahan harga, modal, dan stok tercatat otomatis di Laporan Audit.</p>' : '') +
-        '<div class="btn-row"><button type="button" class="btn btn-outline" data-action="close-sheet">Batal</button><button type="submit" class="btn btn-primary">Simpan</button></div></form>';
+        '<div class="btn-row sheet-actions"><button type="button" class="btn btn-outline" data-action="close-sheet">Batal</button><button type="submit" class="btn btn-primary">Simpan</button></div></form>';
     } else if (sh.type === 'category') {
       body = '<h3 class="display">' + (sh.old ? 'Ubah Nama Kategori' : 'Tambah Kategori') + '</h3><form data-form="category" class="stack">' +
         '<label class="field"><span>Nama kategori</span><input name="name" class="input" value="' + esc(sh.old || '') + '" maxlength="30" required placeholder="Mis. Nasi, Minuman, Camilan"></label>' +
@@ -1094,6 +1109,10 @@
       if (tok === applyBarcode.tok && document.body.contains(f)) setBarcodeMsg('Barcode tercatat. Tidak ada koneksi untuk mencari data produk, isi nama secara manual.', 'muted');
     });
   }
+  document.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if ((e.key === 'Enter' || e.key === ' ') && t && t.classList && t.classList.contains('prow')) { e.preventDefault(); t.click(); }
+  });
   /* ---------- Scan barcode di layar Kasir ---------- */
   function scanToCart(raw) {
     var code = window.Barcode ? Barcode.clean(raw) : String(raw || '').trim();
