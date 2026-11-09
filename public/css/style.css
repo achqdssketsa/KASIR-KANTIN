@@ -659,3 +659,23 @@ body[data-route="pesanan"] .main { padding-bottom: calc(var(--tabbar-h) + var(--
 .kind-top .kind-ic { width: auto; height: auto; background: transparent; color: var(--brand); }
 .kind-card.active .kind-ic { background: transparent; color: var(--brand); }
 .kind-sub { padding-left: 24px; }
+
+/* ---------- v1.7: stok opname ---------- */
+.op-sum { background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md); padding: 12px 14px; margin: 10px 0; }
+.op-sum .kv { padding: 6px 0; font-size: 13.5px; gap: 10px; }
+.op-sum .kv.strong { border-top: 1px solid var(--divider); margin-top: 4px; padding-top: 10px; }
+.op-sum .kv span:last-child { text-align: right; }
+.warn-text { color: #7A5410; margin: 8px 0 0; }
+.orow { display: flex; align-items: center; gap: 10px; padding: 12px; border-left: 4px solid transparent; }
+.orow + .orow { border-top: 1px solid var(--divider); }
+.orow.lost { border-left-color: var(--danger); }
+.orow.gain { border-left-color: var(--ok); }
+.orow.ok { border-left-color: var(--brand-soft, #C9D8CD); }
+.orow-main { flex: 1; min-width: 0; }
+.orow-main h4 { margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.orow-main p { margin: 2px 0 0; }
+.ostep { display: flex; align-items: center; gap: 6px; flex: none; }
+.ocount { width: 64px; height: 44px; text-align: center; font: inherit; font-size: 17px; font-weight: 700; border: 1.5px solid var(--border-strong); border-radius: var(--r-md); background: var(--card); color: var(--on-surface); }
+.ocount:focus { outline: 2px solid var(--brand); outline-offset: 1px; border-color: var(--brand); }
+.op-foot { position: sticky; bottom: 0; z-index: 2; display: grid; grid-template-columns: 1fr; gap: 8px; margin: 14px -4px 0; padding: 12px 4px calc(12px + var(--safe-b)); background: var(--surface); border-top: 1px solid var(--divider); }
+.op-foot .btn { margin: 0; }
