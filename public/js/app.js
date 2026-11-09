@@ -876,6 +876,20 @@
     db.products.forEach(function (p) { if (!p.archived && p.track_stock !== false) snap[p.id] = p.stock || 0; });
     S.opname = { started: new Date().toISOString(), snap: snap, counts: {}, touched: {}, filter: 'all', q: '' };
   }
+  /* Scan barcode di opname: produk yang cocok mendapat tambahan 1 hitungan. Tidak mengubah stok sebelum disimpan. */
+  function opnameScan(raw) {
+    if (!S.opname) opnameStart();
+    var code = window.Barcode ? Barcode.clean(raw) : String(raw || '').trim();
+    var p = db.products.find(function (x) { return !x.archived && x.barcode === code; });
+    if (!p) return { tone: 'error', text: 'Barcode ' + code + ' belum terdaftar sebagai produk' };
+    if (p.track_stock === false) return { tone: 'error', text: p.name + ': stok tidak dilacak, tidak bisa dihitung' };
+    var cur = S.opname.counts[p.id] !== undefined ? S.opname.counts[p.id] : 0;
+    S.opname.counts[p.id] = cur + 1; S.opname.touched[p.id] = true;
+    S.opname.q = ''; S.opname.filter = 'all';
+    render();
+    var snap = S.opname.snap && S.opname.snap[p.id] !== undefined ? S.opname.snap[p.id] : (p.stock || 0);
+    return { tone: 'ok', text: '+1 ' + p.name + ' · hitung ' + (cur + 1) + ' (catatan ' + snap + ')' };
+  }
   function viewOpname() {
     if (!S.opname) opnameStart();
     var o = S.opname, lines = opnameLines(), r = opnameSummary(lines);
@@ -897,7 +911,7 @@
       '<div class="chips sticky-chips">' + [['all', 'Semua'], ['todo', 'Belum dihitung'], ['diff', 'Ada selisih']].map(function (f) {
         return '<button class="chip ' + (o.filter === f[0] ? 'active' : '') + '" data-action="opname-filter" data-f="' + f[0] + '">' + f[1] + '</button>';
       }).join('') + '</div>' +
-      '<label class="search">' + I('search', 18) + '<input id="opname-q" type="search" placeholder="Cari produk atau barcode" value="' + esc(o.q) + '"></label>' +
+      '<label class="search">' + I('search', 18) + '<input id="opname-q" type="search" placeholder="Cari produk atau barcode" value="' + esc(o.q) + '"><button type="button" class="search-scan" data-action="opname-scan" aria-label="Scan barcode">' + I('camera', 20) + '</button></label>' +
       '<div class="plist">' + (shown.length ? shown.map(function (l) {
         var st = l.counted === null ? '' : (l.diff === 0 ? 'ok' : l.diff < 0 ? 'lost' : 'gain');
         return '<div class="orow ' + st + '"><div class="orow-main"><h4>' + esc(l.p.name) + '</h4>' +
@@ -1497,6 +1511,10 @@
     'opname-open': function () { if (!isOwner()) return; opnameStart(); S.drawer = false; go('opname'); },
     'opname-close': function () { if (S.opname && Object.keys(S.opname.counts).length && S.opname.touched && Object.keys(S.opname.touched).length) { confirmSheet({ title: 'Tutup opname?', message: 'Hitungan yang belum disimpan akan hilang.', confirmLabel: 'Tutup', act: 'opname-discard' }); return; } S.opname = null; go('produk'); },
     'opname-filter': function (d) { S.opname.filter = d.f; render(); },
+    'opname-scan': function () {
+      if (!window.Barcode) { toast('Fitur barcode belum terpasang.', 'error'); return; }
+      Barcode.scan(opnameScan, function (m) { toast(m, 'error', 3500); }, { continuous: true });
+    },
     'opname-step': function (d) {
       var p = product(d.id); if (!p) return;
       var cur = S.opname.counts[d.id] !== undefined ? S.opname.counts[d.id] : (p.stock || 0);
