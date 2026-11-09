@@ -16,11 +16,11 @@
     reportDate: U.todayKey(), modalKind: 'modal_in', loginRole: 'owner', prodIncomplete: false
   };
 
-  S.booting = !!Cloud.enabled; S.setup = false; S.fatal = null; S.auditFrom = U.todayKey(); S.auditTo = U.todayKey();
+  S.booting = !!Cloud.enabled; S.setup = false; S.fatal = null; S.auditFrom = U.todayKey(); S.auditTo = U.todayKey(); S.opname = null;
   var sess = Cloud.enabled ? null : localStorage.getItem(Store.SESSION_KEY);
   if (sess) S.user = db.users.find(function (u) { return u.username === sess; }) || null;
 
-  var OWNER_ROUTES = ['produk', 'modal'];   /* kasir boleh: kasir, riwayat, laporan, audit, pengaturan */
+  var OWNER_ROUTES = ['produk', 'modal', 'opname'];   /* kasir boleh: kasir, riwayat, laporan, audit, pengaturan */
 
   /* ---------------- Ikon (gaya Feather) ---------------- */
   var ICONS = {
@@ -789,6 +789,7 @@
     var blocks = db.categories.map(function (c) { var it = list.filter(function (p) { return p.category === c; }); return (S.prodIncomplete && !it.length) ? '' : catBlock(c, it); }).join('') + (orphan.length ? catBlock('Tanpa kategori', orphan, true) : '');
     return topbar('Kelola Produk') + '<div class="page prod-page">' +
       '<div class="add-row"><button class="btn btn-primary" data-action="edit-product" data-id="">' + I('plus', 18) + ' Produk baru</button>' +
+      (isOwner() ? '<button class="btn btn-outline" data-action="opname-open">' + I('clipboard', 18) + ' Stok opname</button>' : '') +
       '<button class="btn btn-outline" data-action="add-category">' + I('plus', 18) + ' Kategori baru</button></div>' +
       stockPanel(all) +
       '<p class="prod-count">' + (S.prodIncomplete ? 'Menampilkan ' + list.length + ' dari ' + all.length + ' produk yang belum lengkap' : all.length + ' produk · ' + db.categories.length + ' kategori') + '</p>' +
@@ -840,6 +841,91 @@
       '<span class="mrow-amt ' + (minus ? 'neg' : 'pos') + '">' + (minus ? '−' : '+') + rp(t.amount || 0) + '</span></div>';
   }
 
+  /* ===== Stok opname =====
+   * Opname = menghitung fisik stok lalu membandingkannya dengan catatan.
+   * Selisih dinilai pada HARGA MODAL (HPP), bukan harga jual: kerugian stok hilang mengurangi laba kotor.
+   *  - Selisih kurang (hilang, rusak, kadaluarsa) = biaya bahan hilang, dicatat sebagai beban di laba (Penyusutan/kerugian stok).
+   *  - Selisih lebih (ditemukan) = mengurangi HPP barang bersangkutan; tidak dianggap pendapatan.
+   * Stok yang disesuaikan diubah lewat selisih (increment), bukan menimpa angka, sehingga penjualan yang masuk
+   * saat opname berlangsung tidak hilang. Nilai selisih dicatat sebagai catatan 'stock_adj' pada log audit. */
+  function opnameLines() {
+    var base = db.products.filter(function (p) { return !p.archived && p.track_stock !== false; });
+    return base.map(function (p) {
+      var counted = S.opname && S.opname.counts[p.id] !== undefined ? S.opname.counts[p.id] : null;
+      var snap = S.opname && S.opname.snap && S.opname.snap[p.id] !== undefined ? S.opname.snap[p.id] : (p.stock || 0);
+      var diff = counted === null ? 0 : counted - snap;
+      return { p: p, system: snap, now: p.stock || 0, counted: counted, diff: diff, value: diff * (p.cost || 0), noCost: !(p.cost > 0) };
+    });
+  }
+  function opnameSummary(lines) {
+    var r = { checked: 0, total: lines.length, lossQty: 0, lossValue: 0, gainQty: 0, gainValue: 0, noCost: 0, sysValue: 0, countValue: 0 };
+    lines.forEach(function (l) {
+      r.sysValue += l.system * (l.p.cost || 0);
+      if (l.counted === null) return;
+      r.checked++;
+      if (l.noCost && l.diff) r.noCost++;
+      if (l.diff < 0) { r.lossQty += -l.diff; r.lossValue += -l.value; }
+      if (l.diff > 0) { r.gainQty += l.diff; r.gainValue += l.value; }
+      r.countValue += l.counted * (l.p.cost || 0);
+    });
+    r.netValue = r.gainValue - r.lossValue;
+    return r;
+  }
+  function opnameStart() {
+    var snap = {};
+    db.products.forEach(function (p) { if (!p.archived && p.track_stock !== false) snap[p.id] = p.stock || 0; });
+    S.opname = { started: new Date().toISOString(), snap: snap, counts: {}, touched: {}, filter: 'all', q: '' };
+  }
+  function viewOpname() {
+    if (!S.opname) opnameStart();
+    var o = S.opname, lines = opnameLines(), r = opnameSummary(lines);
+    var shown = lines.filter(function (l) {
+      if (o.filter === 'diff' && !(l.counted !== null && l.diff !== 0)) return false;
+      if (o.filter === 'todo' && l.counted !== null) return false;
+      if (o.q && l.p.name.toLowerCase().indexOf(o.q.toLowerCase()) < 0 && (l.p.barcode || '').indexOf(o.q) < 0) return false;
+      return true;
+    });
+    var done = r.checked === r.total && r.total > 0;
+    return topbar('Stok Opname', '<button class="icon-btn" data-action="opname-close" aria-label="Tutup opname">' + I('x') + '</button>') +
+      '<div class="page prod-page">' +
+      '<p class="muted small">Hitung stok fisik tiap produk, lalu isi jumlahnya. Selisih dinilai dari modal (HPP).</p>' +
+      '<div class="op-sum"><div class="kv"><span>Sudah dihitung</span><span><b>' + r.checked + '</b> dari ' + r.total + ' produk</span></div>' +
+      '<div class="kv"><span>Selisih kurang (hilang/rusak)</span><span class="' + (r.lossQty ? 'bad' : '') + '">' + (r.lossQty ? '−' + r.lossQty + ' pcs · ' + rp(r.lossValue) : '—') + '</span></div>' +
+      '<div class="kv"><span>Selisih lebih (ditemukan)</span><span>' + (r.gainQty ? '+' + r.gainQty + ' pcs · ' + rp(r.gainValue) : '—') + '</span></div>' +
+      '<div class="kv strong"><span>Dampak ke laba kotor</span><span class="' + (r.netValue < 0 ? 'bad' : 'ok-text') + '">' + (r.netValue > 0 ? '+' : '') + rp(r.netValue) + '</span></div>' +
+      (r.noCost ? '<p class="tiny warn-text">' + r.noCost + ' produk selisihnya belum ternilai karena modal belum diisi.</p>' : '') + '</div>' +
+      '<div class="chips sticky-chips">' + [['all', 'Semua'], ['todo', 'Belum dihitung'], ['diff', 'Ada selisih']].map(function (f) {
+        return '<button class="chip ' + (o.filter === f[0] ? 'active' : '') + '" data-action="opname-filter" data-f="' + f[0] + '">' + f[1] + '</button>';
+      }).join('') + '</div>' +
+      '<label class="search">' + I('search', 18) + '<input id="opname-q" type="search" placeholder="Cari produk atau barcode" value="' + esc(o.q) + '"></label>' +
+      '<div class="plist">' + (shown.length ? shown.map(function (l) {
+        var st = l.counted === null ? '' : (l.diff === 0 ? 'ok' : l.diff < 0 ? 'lost' : 'gain');
+        return '<div class="orow ' + st + '"><div class="orow-main"><h4>' + esc(l.p.name) + '</h4>' +
+          '<p class="tiny muted">Catatan: ' + l.system + ' pcs' + (l.p.cost > 0 ? ' · modal ' + rp(l.p.cost) : ' · modal belum diisi') + '</p>' +
+          (l.counted === null ? '' : '<p class="tiny ' + (l.diff === 0 ? 'ok-text' : l.diff < 0 ? 'bad' : 'ok-text') + '">' + (l.diff === 0 ? 'Sesuai catatan' : (l.diff > 0 ? 'Lebih ' + l.diff : 'Kurang ' + (-l.diff)) + ' pcs' + (l.p.cost > 0 ? ' · ' + (l.value >= 0 ? '+' : '−') + rp(Math.abs(l.value)) : '')) + '</p>') + '</div>' +
+          '<div class="ostep"><button type="button" class="step" data-action="opname-step" data-id="' + l.p.id + '" data-d="-1" aria-label="Kurangi">−</button>' +
+          '<input class="ocount" inputmode="numeric" data-id="' + l.p.id + '" value="' + (l.counted === null ? '' : l.counted) + '" placeholder="' + l.system + '" aria-label="Jumlah hitung ' + esc(l.p.name) + '">' +
+          '<button type="button" class="step" data-action="opname-step" data-id="' + l.p.id + '" data-d="1" aria-label="Tambah">+</button></div></div>';
+      }).join('') : '<div class="empty"><p>Tidak ada produk pada filter ini</p></div>') + '</div>' +
+      '<div class="op-foot"><button class="btn btn-outline" data-action="opname-reset">Mulai ulang hitungan</button>' +
+      '<button class="btn btn-primary" data-action="opname-save"' + (r.checked ? '' : ' disabled') + '>' + (done ? 'Simpan hasil opname' : 'Simpan ' + r.checked + ' produk yang sudah dihitung') + '</button></div></div>';
+  }
+  function opnameSave() {
+    var o = S.opname; if (!o) return;
+    var lines = opnameLines().filter(function (l) { return l.counted !== null && l.diff !== 0; });
+    if (!lines.length) { toast('Tidak ada selisih untuk disimpan', 'ok'); S.opname = null; go('produk'); return; }
+    var now = new Date().toISOString(), parts = [], lossValue = 0, gainValue = 0;
+    lines.forEach(function (l) {
+      var p = product(l.p.id); if (!p) return;
+      p.stock = (p.stock || 0) + l.diff;   /* selisih terhadap catatan saat hitung dimulai; penjualan selama opname tetap ikut */
+      parts.push(p.name + ' ' + (l.diff > 0 ? '+' : '') + l.diff);
+      if (l.value < 0) lossValue += -l.value; else gainValue += l.value;
+    });
+    db.transactions.push({ id: U.uid(), kind: 'log', created_at: now, cashier: S.user.username, voided: false,
+      note: 'Stok opname: ' + parts.length + ' produk berselisih (' + parts.slice(0, 6).join(', ') + (parts.length > 6 ? ', …' : '') + '). Kerugian ' + rp(lossValue) + ', lebih ' + rp(gainValue) + ' (dinilai modal).' });
+    save(); S.opname = null; go('produk');
+    toast('Opname disimpan: ' + lines.length + ' produk diperbarui', 'ok', 3200);
+  }
   function viewModal() {
     var today = U.todayKey();
     var kinds = [['modal_in', 'down', 'Modal Masuk', 'Setoran pemilik'], ['purchase', 'box', 'Belanja Stok', 'Beli barang jualan'], ['expense', 'up', 'Biaya', 'Gas, listrik, gaji'], ['owner_draw', 'up', 'Prive', 'Diambil pemilik']];
@@ -915,8 +1001,8 @@
           : '<label class="btn btn-outline file-btn">' + I('upload', 18) + ' Pulihkan dari cadangan<input type="file" id="restore-file" accept="application/json,.json" hidden></label>') +
         (Cloud.enabled ? '' : '<button class="btn btn-danger-soft" data-action="reset-all">' + I('trash', 18) + ' Hapus semua data & mulai dari awal</button>') + '</div>';
     }
-    return h + (Cloud.enabled ? '<p class="tiny muted center">Kantin Insya v1.6 · mode cloud · ' + db.transactions.length + ' catatan (' + Cloud.historyDays + ' hari terakhir)</p></div>'
-      : '<p class="tiny muted center">Kantin Insya v1.6 · ' + db.transactions.length + ' catatan · penyimpanan ±' + Store.sizeKB() + ' KB dari ±5.000 KB</p></div>');
+    return h + (Cloud.enabled ? '<p class="tiny muted center">Kantin Insya v1.7 · mode cloud · ' + db.transactions.length + ' catatan (' + Cloud.historyDays + ' hari terakhir)</p></div>'
+      : '<p class="tiny muted center">Kantin Insya v1.7 · ' + db.transactions.length + ' catatan · penyimpanan ±' + Store.sizeKB() + ' KB dari ±5.000 KB</p></div>');
   }
 
   function tabbar(r) {
@@ -1057,7 +1143,7 @@
       return;
     }
     if (OWNER_ROUTES.indexOf(r) >= 0 && !isOwner()) { location.hash = '#/kasir'; return; }
-    var views = { kasir: viewKasir, pesanan: viewPesanan, riwayat: viewRiwayat, profil: viewProfil, laporan: viewLaporan, audit: viewAudit, produk: viewProduk, modal: viewModal, pengaturan: viewPengaturan };
+    var views = { kasir: viewKasir, pesanan: viewPesanan, riwayat: viewRiwayat, profil: viewProfil, laporan: viewLaporan, audit: viewAudit, produk: viewProduk, opname: viewOpname, modal: viewModal, pengaturan: viewPengaturan };
     if (!views[r]) r = 'kasir';
     document.body.dataset.route = r;
     app.innerHTML = '<div class="shell ' + (r === 'kasir' ? 'with-cart' : '') + '"><main class="main">' + views[r]() + '</main>' + (r === 'kasir' ? cartPanel() : '') + '</div>' + tabbar(r);
@@ -1408,6 +1494,19 @@
       confirmSheet({ title: 'Hapus kategori?', message: 'Kategori "' + d.cat + '" akan dihapus.', confirmLabel: 'Hapus', act: 'del-cat', id: d.cat });
     },
     'modal-kind': function (d) { S.modalKind = d.k; render(); },
+    'opname-open': function () { if (!isOwner()) return; opnameStart(); S.drawer = false; go('opname'); },
+    'opname-close': function () { if (S.opname && Object.keys(S.opname.counts).length && S.opname.touched && Object.keys(S.opname.touched).length) { confirmSheet({ title: 'Tutup opname?', message: 'Hitungan yang belum disimpan akan hilang.', confirmLabel: 'Tutup', act: 'opname-discard' }); return; } S.opname = null; go('produk'); },
+    'opname-filter': function (d) { S.opname.filter = d.f; render(); },
+    'opname-step': function (d) {
+      var p = product(d.id); if (!p) return;
+      var cur = S.opname.counts[d.id] !== undefined ? S.opname.counts[d.id] : (p.stock || 0);
+      S.opname.counts[d.id] = Math.max(0, cur + Number(d.d)); S.opname.touched[d.id] = true; render();
+    },
+    'opname-reset': function () { confirmSheet({ title: 'Mulai ulang hitungan?', message: 'Semua angka hitung akan dikembalikan ke catatan stok.', confirmLabel: 'Mulai ulang', act: 'opname-restart' }); },
+    'opname-save': function () {
+      var n = opnameLines().filter(function (l) { return l.counted !== null && l.diff !== 0; }).length;
+      confirmSheet({ title: 'Simpan hasil opname?', message: n ? n + ' produk stoknya akan disesuaikan dan selisihnya tercatat di Laporan Audit. Tindakan ini dicatat dengan nama Anda.' : 'Tidak ada selisih.', confirmLabel: 'Simpan', act: 'opname-commit' });
+    },
     'reset-pw': function (d) { S.sheet = { type: 'password', username: d.u, self: d.u === S.user.username }; renderOverlay(); },
     'del-user': function (d) { confirmSheet({ title: 'Hapus pengguna?', message: 'Pengguna "' + d.u + '" tidak bisa masuk lagi. Riwayat transaksinya tetap tersimpan.', confirmLabel: 'Hapus', act: 'del-user', id: d.u }); },
     backup: function () {
@@ -1419,6 +1518,9 @@
   };
 
   var confirmActs = {
+    'opname-commit': function () { opnameSave(); },
+    'opname-discard': function () { S.opname = null; go('produk'); },
+    'opname-restart': function () { opnameStart(); render(); },
     void: function (id, reason) {
       var t = db.transactions.find(function (x) { return x.id === id; }); if (!t || t.voided) return;
       t.voided = true; t.void_reason = reason; t.voided_by = S.user.username; t.voided_at = new Date().toISOString();
@@ -1611,6 +1713,12 @@
   });
   document.addEventListener('change', function (e) {
     var t = e.target;
+    if (t.classList && t.classList.contains('ocount')) {
+      var oid = t.getAttribute('data-id'), v = t.value.replace(/[^\d]/g, '');
+      if (v === '') { delete S.opname.counts[oid]; } else { S.opname.counts[oid] = Math.max(0, parseInt(v, 10)); }
+      S.opname.touched[oid] = true; render(); return;
+    }
+    if (t.id === 'opname-q') { S.opname.q = t.value; render(); return; }
     if (t.id === 'audit-from' || t.id === 'audit-to') {
       var tk = U.todayKey(), v = t.value > tk ? tk : t.value;
       if (t.id === 'audit-from') S.auditFrom = v; else S.auditTo = v;
